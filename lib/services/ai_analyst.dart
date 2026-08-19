@@ -45,7 +45,7 @@ class AiAnalysis {
         bearCase: '${json['bear_case'] ?? ''}',
         invalidation: '${json['invalidation'] ?? ''}',
         recommendation: '${json['recommendation'] ?? 'WATCH'}',
-        confidence: (json['confidence'] as num?)?.round().clamp(0, 100) ?? 0,
+        confidence: ((json['confidence'] as num?)?.round() ?? 0).clamp(0, 100).toInt(),
         reasons: (json['reasons'] as List?)
                 ?.map((e) => '$e')
                 .where((e) => e.trim().isNotEmpty)
