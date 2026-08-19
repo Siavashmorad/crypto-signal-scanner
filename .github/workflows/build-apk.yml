@@ -24,6 +24,21 @@ jobs:
         run: |
           flutter create . --platforms=android --project-name crypto_signal_scanner
           rm -f test/widget_test.dart
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('android/app/src/main/AndroidManifest.xml')
+          text = p.read_text()
+          permission = '    <uses-permission android:name="android.permission.INTERNET" />\n'
+          if 'android.permission.INTERNET' not in text:
+              marker = '<manifest '
+              start = text.find(marker)
+              end = text.find('>', start)
+              if start == -1 or end == -1:
+                  raise SystemExit('AndroidManifest.xml: manifest element not found')
+              text = text[:end + 1] + '\n' + permission + text[end + 1:]
+              p.write_text(text)
+          print('Verified INTERNET permission in release manifest')
+          PY
 
       - name: Get packages
         run: flutter pub get
