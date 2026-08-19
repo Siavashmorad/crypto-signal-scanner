@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models/market_data.dart';
+import 'services/ai_analyst.dart';
 import 'services/scanner_service.dart';
 import 'services/tabdeal_api.dart';
 
@@ -16,6 +17,8 @@ class SignalApp extends StatefulWidget {
 
 class _SignalAppState extends State<SignalApp> {
   bool dark = false, english = false, logged = false, ready = false;
+  String? sessionUsername;
+  String? sessionPassword;
 
   @override
   void initState() {
@@ -35,7 +38,21 @@ class _SignalAppState extends State<SignalApp> {
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('logged', false);
-    if (mounted) setState(() => logged = false);
+    if (mounted) {
+      setState(() {
+        logged = false;
+        sessionUsername = null;
+        sessionPassword = null;
+      });
+    }
+  }
+
+  void _login(String username, String password) {
+    setState(() {
+      sessionUsername = username;
+      sessionPassword = password;
+      logged = true;
+    });
   }
 
   @override
@@ -54,13 +71,15 @@ class _SignalAppState extends State<SignalApp> {
           ? HomePage(
               english: english,
               dark: dark,
+              aiUsername: sessionUsername,
+              aiPassword: sessionPassword,
               onLang: () => setState(() => english = !english),
               onTheme: () => setState(() => dark = !dark),
               onLogout: _logout,
             )
           : LoginPage(
               english: english,
-              onLogin: () => setState(() => logged = true),
+              onLogin: _login,
             ),
     );
   }
@@ -77,7 +96,7 @@ class _SignalAppState extends State<SignalApp> {
 
 class LoginPage extends StatefulWidget {
   final bool english;
-  final VoidCallback onLogin;
+  final void Function(String username, String password) onLogin;
   const LoginPage({super.key, required this.english, required this.onLogin});
   @override
   State<LoginPage> createState() => _LoginPageState();
@@ -97,7 +116,7 @@ class _LoginPageState extends State<LoginPage> {
     }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('logged', true);
-    widget.onLogin();
+    widget.onLogin(username.text.trim(), password.text);
   }
 
   @override
@@ -198,11 +217,14 @@ class _LoginPageState extends State<LoginPage> {
 
 class HomePage extends StatefulWidget {
   final bool english, dark;
+  final String? aiUsername, aiPassword;
   final VoidCallback onLang, onTheme, onLogout;
   const HomePage({
     super.key,
     required this.english,
     required this.dark,
+    required this.aiUsername,
+    required this.aiPassword,
     required this.onLang,
     required this.onTheme,
     required this.onLogout,
@@ -213,12 +235,17 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final scanner = ScannerService(TabdealApi());
+  final ai = AiAnalystService();
   final history = <MarketSignal>[];
   bool loading = false;
   String timeframe = '15m';
   String? status;
   List<MarketSignal> signals = [];
   int marketCount = 0;
+  MarketSignal? selectedForAi;
+  AiAnalysis? aiAnalysis;
+  bool aiLoading = false;
+  String? aiError;
 
   Duration get duration => switch (timeframe) {
         '1m' => const Duration(minutes: 1),
@@ -269,10 +296,49 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> analyzeWithAi(MarketSignal signal) async {
+    if (aiLoading) return;
+    setState(() {
+      selectedForAi = signal;
+      aiAnalysis = null;
+      aiError = null;
+      aiLoading = true;
+    });
+    try {
+      if (widget.aiUsername == null || widget.aiPassword == null) {
+        throw StateError(widget.english
+            ? 'Please sign in again to use AI analysis.'
+            : 'برای تحلیل هوش مصنوعی دوباره وارد شوید.');
+      }
+      final result = await ai.analyze(
+        signal: signal,
+        username: widget.aiUsername!,
+        password: widget.aiPassword!,
+      );
+      if (!mounted) return;
+      setState(() {
+        aiAnalysis = result;
+        aiLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        aiLoading = false;
+        aiError = e.toString().replaceFirst('Bad state: ', '');
+      });
+    }
+  }
+
   String money(double value) {
     if (value >= 1000) return value.toStringAsFixed(2);
     if (value >= 1) return value.toStringAsFixed(5);
     return value.toStringAsFixed(8);
+  }
+
+  @override
+  void dispose() {
+    ai.dispose();
+    super.dispose();
   }
 
   @override
@@ -289,8 +355,7 @@ class _HomePageState extends State<HomePage> {
             IconButton(
               onPressed: widget.onTheme,
               tooltip: en ? 'Theme' : 'پوسته',
-              icon: Icon(
-                  widget.dark ? Icons.light_mode : Icons.dark_mode),
+              icon: Icon(widget.dark ? Icons.light_mode : Icons.dark_mode),
             ),
             IconButton(
               onPressed: widget.onLang,
@@ -393,9 +458,30 @@ class _HomePageState extends State<HomePage> {
                         signal: signal,
                         en: en,
                         money: money,
+                        onAi: ai.configured ? () => analyzeWithAi(signal) : null,
                       ),
                     ),
               ],
+              if (selectedForAi != null || aiLoading || aiError != null)
+                _AiAnalysisCard(
+                  en: en,
+                  signal: selectedForAi,
+                  analysis: aiAnalysis,
+                  loading: aiLoading,
+                  error: aiError,
+                ),
+              if (!ai.configured)
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.psychology_outlined),
+                    title: Text(en
+                        ? 'AI Analyst is ready but not configured in this APK.'
+                        : 'تحلیل‌گر هوش مصنوعی آماده است اما در این APK پیکربندی نشده است.'),
+                    subtitle: Text(en
+                        ? 'The private backend must be supplied at build time. No AI key is stored in the app.'
+                        : 'بک‌اند خصوصی باید هنگام Build معرفی شود؛ هیچ کلید هوش مصنوعی داخل APK ذخیره نمی‌شود.'),
+                  ),
+                ),
               if (history.isNotEmpty)
                 Card(
                   child: ExpansionTile(
@@ -419,8 +505,8 @@ class _HomePageState extends State<HomePage> {
                   leading: const Icon(Icons.shield_outlined),
                   title: Text(en ? 'Signal-only mode' : 'حالت فقط سیگنال'),
                   subtitle: Text(en
-                      ? 'The app never submits orders to the exchange.'
-                      : 'این برنامه هیچ سفارشی به صرافی ارسال نمی‌کند.'),
+                      ? 'AI only analyzes and suggests. The app never submits orders.'
+                      : 'هوش مصنوعی فقط تحلیل و پیشنهاد می‌دهد؛ برنامه هیچ سفارشی ارسال نمی‌کند.'),
                 ),
               ),
               if (marketCount > 0)
@@ -445,10 +531,12 @@ class _SignalCard extends StatelessWidget {
   final MarketSignal signal;
   final bool en;
   final String Function(double) money;
+  final VoidCallback? onAi;
   const _SignalCard({
     required this.signal,
     required this.en,
     required this.money,
+    required this.onAi,
   });
 
   @override
@@ -482,6 +570,19 @@ class _SignalCard extends StatelessWidget {
               _row('ATR', money(signal.atr)),
               _row(en ? 'Risk / Reward' : 'ریسک / سود',
                   '1 : ${signal.riskReward.toStringAsFixed(1)}'),
+              if (onAi != null) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: onAi,
+                    icon: const Icon(Icons.psychology_outlined),
+                    label: Text(en
+                        ? 'AI market analysis'
+                        : 'تحلیل هوش مصنوعی بازار'),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -494,6 +595,119 @@ class _SignalCard extends StatelessWidget {
           children: [
             Text(label),
             Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+      );
+}
+
+class _AiAnalysisCard extends StatelessWidget {
+  final bool en;
+  final MarketSignal? signal;
+  final AiAnalysis? analysis;
+  final bool loading;
+  final String? error;
+
+  const _AiAnalysisCard({
+    required this.en,
+    required this.signal,
+    required this.analysis,
+    required this.loading,
+    required this.error,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) {
+      return Card(
+        child: ListTile(
+          leading: const SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          title: Text(en ? 'AI is analyzing...' : 'هوش مصنوعی در حال تحلیل است...'),
+          subtitle: Text(en
+              ? 'The AI receives computed market data only; no order is sent.'
+              : 'هوش مصنوعی فقط داده محاسبه‌شده بازار را دریافت می‌کند و هیچ سفارشی ارسال نمی‌شود.'),
+        ),
+      );
+    }
+    if (error != null) {
+      return Card(
+        child: ListTile(
+          leading: const Icon(Icons.error_outline),
+          title: Text(en ? 'AI analysis unavailable' : 'تحلیل هوش مصنوعی در دسترس نیست'),
+          subtitle: Text(error!),
+        ),
+      );
+    }
+    final result = analysis;
+    if (result == null) return const SizedBox.shrink();
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  en ? 'AI Market Analyst' : 'تحلیل‌گر هوش مصنوعی بازار',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                Chip(label: Text('${result.confidence}%')),
+              ],
+            ),
+            if (signal != null) Text('${signal!.symbol} • ${signal!.side}'),
+            const SizedBox(height: 10),
+            Text(result.summary),
+            const Divider(),
+            _line(en ? 'Recommendation' : 'پیشنهاد', result.recommendation),
+            _line(en ? 'Trend' : 'روند', result.trend),
+            _line(en ? 'Momentum' : 'مومنتوم', result.momentum),
+            _line(en ? 'Risk' : 'ریسک', result.riskLevel),
+            _line(en ? 'Signal quality' : 'کیفیت سیگنال', result.signalQuality),
+            if (result.bullCase.isNotEmpty)
+              _line(en ? 'Bull case' : 'سناریوی صعودی', result.bullCase),
+            if (result.bearCase.isNotEmpty)
+              _line(en ? 'Bear case' : 'سناریوی نزولی', result.bearCase),
+            if (result.invalidation.isNotEmpty)
+              _line(en ? 'Invalidation' : 'شرط بی‌اعتباری', result.invalidation),
+            if (result.reasons.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(en ? 'Reasons' : 'دلایل',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              ...result.reasons.map((reason) => Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text('• $reason'),
+                  )),
+            ],
+            const SizedBox(height: 10),
+            Text(
+              en
+                  ? 'AI confidence is analytical confidence, not a profit probability. You decide and execute manually.'
+                  : 'درصد اطمینان AI اطمینان تحلیلی است، نه احتمال سود. تصمیم و اجرای معامله کاملاً دستی است.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _line(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 2),
+            Text(value),
           ],
         ),
       );
