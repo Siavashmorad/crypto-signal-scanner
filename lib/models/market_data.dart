@@ -20,6 +20,7 @@ class Candle {
 class MarketSignal {
   final String symbol;
   final String side;
+  final String timeframe;
   final double entry;
   final double stopLoss;
   final double tp1;
@@ -30,5 +31,5 @@ class MarketSignal {
   final double riskReward;
   final DateTime timestamp;
 
-  const MarketSignal({required this.symbol, required this.side, required this.entry, required this.stopLoss, required this.tp1, required this.tp2, required this.tp3, required this.atr, required this.confidence, required this.riskReward, required this.timestamp});
+  const MarketSignal({required this.symbol, required this.side, required this.timeframe, required this.entry, required this.stopLoss, required this.tp1, required this.tp2, required this.tp3, required this.atr, required this.confidence, required this.riskReward, required this.timestamp});
 }
