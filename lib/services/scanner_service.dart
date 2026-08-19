@@ -91,7 +91,8 @@ class ScannerService {
     final tp1 = long ? last + reward * 0.5 : last - reward * 0.5;
     final tp2 = long ? last + reward : last - reward;
     final tp3 = long ? last + reward * 1.5 : last - reward * 1.5;
-    return MarketSignal(symbol: symbol, side: side, entry: last, stopLoss: stop, tp1: tp1, tp2: tp2, tp3: tp3, atr: atr, confidence: score, riskReward: 2, timestamp: DateTime.now());
+    final timeframeLabel = '${timeframe.inMinutes}m';
+    return MarketSignal(symbol: symbol, side: side, timeframe: timeframeLabel, entry: last, stopLoss: stop, tp1: tp1, tp2: tp2, tp3: tp3, atr: atr, confidence: score, riskReward: 2, timestamp: DateTime.now());
   }
 
   Future<List<MarketSignal>> scanAll({Duration timeframe = const Duration(minutes: 15), int maxConcurrency = 4}) async {
