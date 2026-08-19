@@ -1,0 +1,14 @@
+scanner:
+  timeframes: ["1m", "5m", "15m", "1h"]
+  scan_interval_seconds: 15
+  minimum_signal_score: 70
+  stale_data_seconds: 10
+
+risk:
+  default_capital: 10000000
+  max_risk_percent: 1.0
+  minimum_reward_risk: 2.0
+
+execution:
+  enabled: false
+  mode: "signal_only"
