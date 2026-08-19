@@ -14,7 +14,7 @@ A **signal-only** cryptocurrency market scanner for Tabdeal. It reads public mar
 - No registration and no trading credentials in the application.
 - Docker and GitHub Actions test workflow.
 
-Tabdeal's official documentation identifies public market endpoints as `NONE` security, while trading endpoints require API credentials/signatures. This project intentionally uses only the public market side for now. fileciteturn6file0
+Tabdeal's official documentation identifies public market endpoints as `NONE` security, while trading endpoints require API credentials/signatures. This project intentionally uses only the public market side for now.
 
 ## Authentication
 
