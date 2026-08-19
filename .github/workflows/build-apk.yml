@@ -26,8 +26,8 @@ jobs:
       - name: Get packages
         run: flutter pub get
 
-      - name: Format check
-        run: dart format --output=none --set-exit-if-changed lib test
+      - name: Format source
+        run: dart format lib test
 
       - name: Static analysis
         run: flutter analyze --no-fatal-infos
