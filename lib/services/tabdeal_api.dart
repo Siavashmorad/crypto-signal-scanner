@@ -14,15 +14,13 @@ class TabdealApi {
   final http.Client client;
   final Duration timeout;
 
-  const TabdealApi({http.Client? client, this.timeout = const Duration(seconds: 8)}) : client = client ?? const http.Client();
+  TabdealApi({http.Client? client, this.timeout = const Duration(seconds: 8)}) : client = client ?? http.Client();
 
   Future<dynamic> _get(String path, [Map<String, String>? query]) async {
     final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);
     try {
       final response = await client.get(uri, headers: const {'Accept': 'application/json'}).timeout(timeout);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw TabdealApiException('HTTP ${response.statusCode}');
-      }
+      if (response.statusCode < 200 || response.statusCode >= 300) throw TabdealApiException('HTTP ${response.statusCode}');
       return jsonDecode(response.body);
     } catch (e) {
       if (e is TabdealApiException) rethrow;
