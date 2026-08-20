@@ -1,12 +1,28 @@
 import '../models/market_data.dart';
 import 'tabdeal_api.dart';
 
+class ScanProgress {
+  final int completed;
+  final int total;
+  final int failed;
+
+  const ScanProgress({
+    required this.completed,
+    required this.total,
+    required this.failed,
+  });
+
+  double get fraction => total == 0 ? 0 : completed / total;
+}
+
 class ScannerService {
   final TabdealApi api;
+  final Map<String, String> lastFailures = <String, String>{};
+
   const ScannerService(this.api);
 
   List<Candle> buildCandles(List<TradePoint> trades, Duration timeframe) {
-    if (trades.isEmpty) return const [];
+    if (trades.isEmpty || timeframe.inMilliseconds <= 0) return const [];
     final sorted = [...trades]
       ..sort((a, b) => a.timestampMs.compareTo(b.timestampMs));
     final bucketMs = timeframe.inMilliseconds;
@@ -154,20 +170,43 @@ class ScannerService {
   Future<List<MarketSignal>> scanAll({
     Duration timeframe = const Duration(minutes: 15),
     int maxConcurrency = 4,
+    void Function(ScanProgress progress)? onProgress,
   }) async {
     final symbols = await api.activeUsdtSymbols();
     final signals = <MarketSignal>[];
-    for (var start = 0; start < symbols.length; start += maxConcurrency) {
-      final batch = symbols.skip(start).take(maxConcurrency).toList();
-      final results = await Future.wait(batch.map((s) async {
+    lastFailures.clear();
+
+    if (symbols.isEmpty) {
+      onProgress?.call(const ScanProgress(completed: 0, total: 0, failed: 0));
+      return signals;
+    }
+
+    final concurrency = maxConcurrency.clamp(1, 12).toInt();
+    var completed = 0;
+    var failed = 0;
+    onProgress?.call(ScanProgress(completed: 0, total: symbols.length, failed: 0));
+
+    for (var start = 0; start < symbols.length; start += concurrency) {
+      final batch = symbols.skip(start).take(concurrency).toList();
+      final results = await Future.wait(batch.map((symbol) async {
         try {
-          return await scanSymbol(s, timeframe);
-        } catch (_) {
+          return await scanSymbol(symbol, timeframe);
+        } catch (e) {
+          failed++;
+          lastFailures[symbol] = e.toString();
           return null;
+        } finally {
+          completed++;
+          onProgress?.call(ScanProgress(
+            completed: completed,
+            total: symbols.length,
+            failed: failed,
+          ));
         }
       }));
       signals.addAll(results.whereType<MarketSignal>());
     }
+
     signals.sort((a, b) {
       final rank = _rankScore(b).compareTo(_rankScore(a));
       if (rank != 0) return rank;
@@ -175,4 +214,6 @@ class ScannerService {
     });
     return signals;
   }
+
+  void dispose() => api.dispose();
 }
