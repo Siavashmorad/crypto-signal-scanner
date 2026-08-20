@@ -2,14 +2,11 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:crypto_signal_scanner/models/market_data.dart';
 import 'package:crypto_signal_scanner/services/scanner_service.dart';
+import 'package:crypto_signal_scanner/services/tabdeal_api.dart';
 
 void main() {
   test('buildCandles aggregates OHLCV into timeframe buckets', () {
-    final scanner = ScannerService(
-      // buildCandles does not access the API, so a real client is not used.
-      // The service is disposed immediately after the pure aggregation check.
-      throw UnimplementedError('API is not used by this test'),
-    );
+    final scanner = ScannerService(TabdealApi());
 
     final candles = scanner.buildCandles(
       const [
@@ -30,5 +27,7 @@ void main() {
     expect(candles[1].open, 102);
     expect(candles[1].close, 102);
     expect(candles[1].volume, 4);
+
+    scanner.dispose();
   });
 }
