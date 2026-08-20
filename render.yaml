@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: crypto-signal-scanner-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SIGNAL_SCANNER_USERNAME
+        sync: false
+      - key: SIGNAL_SCANNER_PASSWORD_HASH
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4.1-mini
+      - key: OPENAI_RESPONSES_URL
+        value: https://api.openai.com/v1/responses
+      - key: EXECUTION_MODE
+        value: signal_only
