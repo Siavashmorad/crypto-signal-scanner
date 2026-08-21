@@ -3,7 +3,7 @@ import 'tabdeal_api.dart';
 
 class ScannerService {
   final TabdealApi api;
-  const ScannerService(this.api);
+  ScannerService(this.api);
 
   List<Candle> buildCandles(List<TradePoint> trades, Duration timeframe) {
     if (trades.isEmpty) return const [];
