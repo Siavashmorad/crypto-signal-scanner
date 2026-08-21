@@ -36,8 +36,16 @@ jobs:
               if start == -1 or end == -1:
                   raise SystemExit('AndroidManifest.xml: manifest element not found')
               text = text[:end + 1] + '\n' + permission + text[end + 1:]
-              p.write_text(text)
-          print('Verified INTERNET permission in release manifest')
+          old = 'android:label="crypto_signal_scanner"'
+          if old in text:
+              text = text.replace(old, 'android:label="سیگنال‌یاب"', 1)
+          elif 'android:label=' in text:
+              import re
+              text = re.sub(r'android:label="[^"]*"', 'android:label="سیگنال‌یاب"', text, count=1)
+          else:
+              text = text.replace('<application ', '<application android:label="سیگنال‌یاب" ', 1)
+          p.write_text(text)
+          print('Verified INTERNET permission and SignalYab Android label')
           PY
 
       - name: Get packages
