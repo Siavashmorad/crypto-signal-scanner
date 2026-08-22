@@ -16,5 +16,12 @@ services:
         value: gpt-4.1-mini
       - key: OPENAI_RESPONSES_URL
         value: https://api.openai.com/v1/responses
+      # paper = virtual positions after your approve
+      # live_with_approval = real Tabdeal orders only after your approve
+      # signal_only = no trading at all
       - key: EXECUTION_MODE
-        value: signal_only
+        value: paper
+      - key: TABDEAL_API_KEY
+        sync: false
+      - key: TABDEAL_API_SECRET
+        sync: false
