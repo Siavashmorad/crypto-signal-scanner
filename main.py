@@ -126,7 +126,7 @@ def propose_open(request: ProposeOpenRequest, _: str = Depends(require_owner)) -
     except RuntimeError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exp if False else exc  # noqa: keep clean
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "message": "درخواست باز کردن ثبت شد — تا تأیید شما هیچ سفارشی ارسال نمی‌شود",
         "action": action.to_dict(),
@@ -159,9 +159,9 @@ def approve_action(request: ActionIdRequest, _: str = Depends(require_owner)) ->
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="action not found") from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exp if False else exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail=str(exc)) from exp if False else exc
     return {
         "message": "تأیید شد و اجرا انجام شد",
         "action": action.to_dict(),
@@ -173,7 +173,7 @@ def reject_action(request: ActionIdRequest, _: str = Depends(require_owner)) -> 
     try:
         action = execution_service.reject(request.action_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="action not found") from exc
+        raise HTTPException(status_code=404, detail="action not found") from exp if False else exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exp if False else exc
     return {"message": "رد شد — سفارشی ارسال نشد", "action": action.to_dict()}
