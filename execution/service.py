@@ -13,6 +13,7 @@ from execution.models import (
     new_action_id,
 )
 from execution import store
+from execution import risk
 from execution.tabdeal_trade import TabdealTradeClient, TabdealTradeError
 
 DEFAULT_TTL_MS = 15 * 60 * 1000  # 15 minutes
@@ -34,11 +35,19 @@ def mode_info() -> dict[str, Any]:
         "live_keys_configured": trade.configured,
         "can_propose": mode != ExecutionMode.SIGNAL_ONLY,
         "can_live_execute": mode == ExecutionMode.LIVE_WITH_APPROVAL and trade.configured,
+        "risk": risk.limits(),
         "note": {
             ExecutionMode.SIGNAL_ONLY.value: "فقط سیگنال؛ هیچ سفارشی ارسال نمی‌شود",
             ExecutionMode.PAPER.value: "پوزیشن مجازی بعد از تأیید شما",
-            ExecutionMode.LIVE_WITH_APPROVAL.value: "سفارش واقعی فقط بعد از تأیید صریح شما",
+            ExecutionMode.LIVE_WITH_APPROVAL.value: "سفارش واقعی تبدیل فقط بعد از تأیید صریح شما",
         }.get(mode.value, ""),
+        "business": {
+            "market_data": "Tabdeal public API (real-time)",
+            "orders": "Tabdeal TRADE API when mode=live_with_approval",
+            "ai": "OpenAI via private backend (OPENAI_API_KEY)",
+            "approval": "required before every open and close",
+            "pnl": "mark price from live order book",
+        },
     }
 
 
@@ -55,12 +64,13 @@ def propose_open(
 ) -> PendingAction:
     mode = current_mode()
     if mode == ExecutionMode.SIGNAL_ONLY:
-        raise RuntimeError("EXECUTION_MODE=signal_only — تغییر به paper یا live_with_approval لازم است")
+        raise RuntimeError("EXECUTION_MODE=signal_only — set paper or live_with_approval")
     side_u = side.upper()
     if side_u not in {"LONG", "SHORT"}:
         raise ValueError("side must be LONG or SHORT")
     if quantity <= 0:
         raise ValueError("quantity must be positive")
+    risk.validate_open(symbol=symbol, quantity=quantity, entry=entry)
     now = int(time.time() * 1000)
     action = PendingAction(
         id=new_action_id(),
@@ -87,19 +97,15 @@ def propose_close(
 ) -> PendingAction:
     mode = current_mode()
     if mode == ExecutionMode.SIGNAL_ONLY:
-        raise RuntimeError("EXECUTION_MODE=signal_only — تغییر به paper یا live_with_approval لازم است")
+        raise RuntimeError("EXECUTION_MODE=signal_only — set paper or live_with_approval")
     symbol_u = symbol.upper()
     qty = quantity
     if qty is None:
         paper = store.get_paper_position(symbol_u)
-        if paper:
-            qty = float(paper.get("quantity", 0))
-        else:
-            qty = 0.0
+        qty = float(paper.get("quantity", 0)) if paper else 0.0
     if qty is not None and qty <= 0:
         raise ValueError("no open quantity to close")
     now = int(time.time() * 1000)
-    # side here is informational for close; execution maps from position
     side = "CLOSE"
     paper = store.get_paper_position(symbol_u)
     if paper:
@@ -183,19 +189,16 @@ def _execute_paper(action: PendingAction) -> dict[str, Any]:
         }
         store.set_paper_position(action.symbol, pos)
         return {"type": "paper_open", "position": pos}
-    # CLOSE
     existing = store.get_paper_position(action.symbol)
     store.set_paper_position(action.symbol, None)
     return {"type": "paper_close", "closed": existing}
 
 
 def _order_side_for_open(position_side: str) -> str:
-    # LONG → BUY, SHORT → SELL
     return "BUY" if position_side.upper() == "LONG" else "SELL"
 
 
 def _order_side_for_close(position_side: str) -> str:
-    # close LONG → SELL, close SHORT → BUY
     return "SELL" if position_side.upper() == "LONG" else "BUY"
 
 
@@ -207,14 +210,27 @@ def _execute_live(action: PendingAction) -> dict[str, Any]:
     if action.action == ActionType.OPEN:
         order_side = _order_side_for_open(action.side)
         raw = client.place_market_order(action.symbol, order_side, action.quantity)
-        # Track locally for close proposals
+        fill_entry = action.entry
+        # Prefer exchange average fill if present
+        if isinstance(raw, dict):
+            for key in ("avgPrice", "price", "fills"):
+                if key == "fills" and isinstance(raw.get("fills"), list) and raw["fills"]:
+                    try:
+                        fill_entry = float(raw["fills"][0].get("price") or fill_entry or 0)
+                    except (TypeError, ValueError):
+                        pass
+                elif key in raw and raw[key] not in (None, ""):
+                    try:
+                        fill_entry = float(raw[key])
+                    except (TypeError, ValueError):
+                        pass
         store.set_paper_position(
             action.symbol,
             {
                 "symbol": action.symbol,
                 "side": action.side,
                 "quantity": action.quantity,
-                "entry": action.entry,
+                "entry": fill_entry,
                 "stop_loss": action.stop_loss,
                 "take_profit": action.take_profit,
                 "opened_at_ms": int(time.time() * 1000),
@@ -222,7 +238,7 @@ def _execute_live(action: PendingAction) -> dict[str, Any]:
                 "exchange": raw,
             },
         )
-        return {"type": "live_open", "order": raw}
+        return {"type": "live_open", "order": raw, "entry": fill_entry}
 
     pos = store.get_paper_position(action.symbol)
     position_side = (pos or {}).get("side", action.side)
@@ -231,5 +247,6 @@ def _execute_live(action: PendingAction) -> dict[str, Any]:
     if qty <= 0:
         raise TabdealTradeError("no quantity to close")
     raw = client.place_market_order(action.symbol, order_side, qty)
+    closed = pos
     store.set_paper_position(action.symbol, None)
-    return {"type": "live_close", "order": raw}
+    return {"type": "live_close", "order": raw, "closed": closed}
