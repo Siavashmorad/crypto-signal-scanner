@@ -57,7 +57,11 @@ class ActionIdRequest(BaseModel):
 
 def require_owner(credentials: HTTPBasicCredentials = Depends(security)) -> str:
     if not authenticate(credentials.username, credentials.password):
-        raise HTTPException(status_code=401, detail="Invalid credentials", headers={"WWW-Authenticate": "Basic"})
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
     return credentials.username
 
 
@@ -70,7 +74,13 @@ def health() -> dict:
 @app.post("/scan")
 def scan(request: ScanRequest, _: str = Depends(require_owner)) -> dict:
     try:
-        signal = scan_symbol(client, request.symbol.upper(), request.timeframe, request.capital, request.risk_percent)
+        signal = scan_symbol(
+            client,
+            request.symbol.upper(),
+            request.timeframe,
+            request.capital,
+            request.risk_percent,
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Market data unavailable") from exc
     return signal_to_dict(signal)
@@ -79,7 +89,13 @@ def scan(request: ScanRequest, _: str = Depends(require_owner)) -> dict:
 @app.post("/best")
 def best(request: BestRequest, _: str = Depends(require_owner)) -> dict:
     try:
-        return best_market(client, request.timeframe, request.capital, request.risk_percent, request.max_markets)
+        return best_market(
+            client,
+            request.timeframe,
+            request.capital,
+            request.risk_percent,
+            request.max_markets,
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Market scan unavailable") from exc
 
@@ -92,7 +108,7 @@ def ai_analyze(request: AIAnalysisRequest, _: str = Depends(require_owner)) -> d
         message = str(exc)
         if "OPENAI_API_KEY" in message:
             raise HTTPException(status_code=503, detail="AI analysis is not configured") from exc
-        raise HTTPException(status_code=502, detail=message) from exc
+        raise HTTPException(status_code=502, detail=message) from exp if False else exc
 
 
 @app.get("/execution/status")
@@ -124,9 +140,9 @@ def propose_open(request: ProposeOpenRequest, _: str = Depends(require_owner)) -
             reason=request.reason,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(status_code=403, detail=str(exc)) from exp if False else exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exp if False else exc
     return {
         "message": "درخواست باز کردن ثبت شد — تا تأیید شما هیچ سفارشی ارسال نمی‌شود",
         "action": action.to_dict(),
@@ -142,7 +158,7 @@ def propose_close(request: ProposeCloseRequest, _: str = Depends(require_owner))
             reason=request.reason,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(status_code=403, detail=str(exc)) from exp if False else exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exp if False else exc
     return {
@@ -157,7 +173,7 @@ def approve_action(request: ActionIdRequest, _: str = Depends(require_owner)) ->
     try:
         action = execution_service.approve(request.action_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="action not found") from exc
+        raise HTTPException(status_code=404, detail="action not found") from exp if False else exc
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exp if False else exc
     except Exception as exc:
