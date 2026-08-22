@@ -7,12 +7,13 @@ from pydantic import BaseModel, Field
 from ai.analyst import analyze_market
 from auth.single_user import authenticate
 from data.tabdeal import TabdealPublicClient
+from execution import monitor as execution_monitor
 from execution import service as execution_service
 from execution import store as execution_store
 from scanner.best_market import best_market
 from scanner.engine import scan_symbol, signal_to_dict
 
-app = FastAPI(title="Crypto Signal Scanner", version="0.4.0")
+app = FastAPI(title="SignalYab", version="0.5.0")
 security = HTTPBasic()
 client = TabdealPublicClient()
 
@@ -108,7 +109,7 @@ def ai_analyze(request: AIAnalysisRequest, _: str = Depends(require_owner)) -> d
         message = str(exc)
         if "OPENAI_API_KEY" in message:
             raise HTTPException(status_code=503, detail="AI analysis is not configured") from exc
-        raise HTTPException(status_code=502, detail=message) from exp if False else exc
+        raise HTTPException(status_code=502, detail=message) from exc
 
 
 @app.get("/execution/status")
@@ -127,6 +128,15 @@ def execution_positions(_: str = Depends(require_owner)) -> dict:
     return {"positions": execution_store.get_paper_positions()}
 
 
+@app.get("/execution/monitor")
+def execution_monitor_endpoint(_: str = Depends(require_owner)) -> dict:
+    """Live mark prices + unrealized PnL; auto-propose CLOSE on TP/SL for your approval."""
+    try:
+        return execution_monitor.snapshot_positions(client, auto_propose_close=True)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @app.post("/execution/propose-open")
 def propose_open(request: ProposeOpenRequest, _: str = Depends(require_owner)) -> dict:
     try:
@@ -140,9 +150,9 @@ def propose_open(request: ProposeOpenRequest, _: str = Depends(require_owner)) -
             reason=request.reason,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exp if False else exc
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exp if False else exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "message": "درخواست باز کردن ثبت شد — تا تأیید شما هیچ سفارشی ارسال نمی‌شود",
         "action": action.to_dict(),
@@ -158,9 +168,9 @@ def propose_close(request: ProposeCloseRequest, _: str = Depends(require_owner))
             reason=request.reason,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exp if False else exc
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exp if False else exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "message": "درخواست بستن ثبت شد — تا تأیید شما هیچ سفارشی ارسال نمی‌شود",
         "action": action.to_dict(),
@@ -169,19 +179,15 @@ def propose_close(request: ProposeCloseRequest, _: str = Depends(require_owner))
 
 @app.post("/execution/approve")
 def approve_action(request: ActionIdRequest, _: str = Depends(require_owner)) -> dict:
-    """Explicit user approval — only then paper/live order runs."""
     try:
         action = execution_service.approve(request.action_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="action not found") from exp if False else exc
+        raise HTTPException(status_code=404, detail="action not found") from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exp if False else exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exp if False else exc
-    return {
-        "message": "تأیید شد و اجرا انجام شد",
-        "action": action.to_dict(),
-    }
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"message": "تأیید شد و اجرا انجام شد", "action": action.to_dict()}
 
 
 @app.post("/execution/reject")
@@ -189,7 +195,7 @@ def reject_action(request: ActionIdRequest, _: str = Depends(require_owner)) -> 
     try:
         action = execution_service.reject(request.action_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="action not found") from exp if False else exc
+        raise HTTPException(status_code=404, detail="action not found") from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exp if False else exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"message": "رد شد — سفارشی ارسال نشد", "action": action.to_dict()}

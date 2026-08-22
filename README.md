@@ -1,97 +1,63 @@
-# Crypto Signal Scanner
+# SignalYab (سیگنال‌یاب)
 
-A **signal-only** cryptocurrency market scanner for Tabdeal. It reads public market data, analyzes markets and returns a trade setup. It never places orders.
+Production-oriented **Tabdeal** scanner with **approval-gated** real trading.
 
-## Current capabilities
+## Real stack
 
-- Tabdeal public `exchangeInfo`, `trades` and `depth` integration.
-- Builds `1m`, `5m`, `15m` and `1h` candles from trades.
-- EMA, RSI and ATR analysis.
-- Order-book imbalance scoring.
-- Risk-based position sizing from capital and maximum risk.
-- `LONG`, `SHORT` or `NO_TRADE` decisions.
-- Multiple take-profit levels.
-- Full USDT market discovery and bounded concurrent scanning in the Flutter client.
-- Protected API with exactly one configured owner account.
-- No registration and no trading credentials in the application.
-- Private server-side AI market analyst integration.
-- Docker and GitHub Actions test/build workflow.
+| Layer | Source |
+|-------|--------|
+| Market data | Tabdeal public API (live order book + trades) |
+| Best market | Ranked multi-symbol scan (EMA/RSI/ATR/order-book) |
+| AI second opinion | OpenAI on private backend (`OPENAI_API_KEY`) |
+| Orders | Tabdeal TRADE API (`TABDEAL_API_KEY` / `SECRET`) |
+| PnL | Live mid price from order book |
+| Control | **Your explicit Approve** before every open/close |
 
-Tabdeal's official documentation identifies public market endpoints as `NONE` security, while trading endpoints require API credentials/signatures. This project intentionally uses only the public market side for now.
+No software guarantees profit. Real money can be lost.
 
-## AI Market Analyst
+## End-to-end business flow
 
-The AI analyst receives an already-computed signal and returns a structured second opinion containing:
+1. Online scan of USDT markets on Tabdeal
+2. Rank best setups
+3. Optional AI analysis
+4. You review → Propose OPEN → **Approve** → live/paper order
+5. `/execution/monitor` tracks mark price + unrealized PnL
+6. On TP or SL hit → system **proposes CLOSE** (still needs your Approve)
+7. You Approve → position closes on exchange
 
-- trend and momentum assessment
-- signal quality
-- risk level
-- bullish and bearish scenarios
-- invalidation condition
-- `WATCH`, `LONG_BIAS`, `SHORT_BIAS` or `AVOID` recommendation
-- analytical confidence
-- reasons behind the assessment
+## Execution modes
 
-The AI is **not** an execution engine. The application never submits exchange orders. The user manually decides whether to open a position.
+| `EXECUTION_MODE` | Behavior |
+|------------------|----------|
+| `signal_only` | Signals only |
+| `paper` | Virtual fills after Approve (practice) |
+| `live_with_approval` | **Real money** Tabdeal MARKET orders after Approve |
 
-The OpenAI credential is server-side only. Never put `OPENAI_API_KEY` in Flutter source code or the APK.
-
-Required backend environment variables:
-
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL` (default example: `gpt-4.1-mini`)
-- `OPENAI_RESPONSES_URL` (default: `https://api.openai.com/v1/responses`)
-
-The Flutter release accepts the private backend URL through the build-time variable `AI_BACKEND_URL`.
-
-## Authentication
-
-Set these only as deployment secrets/environment variables:
-
-- `SIGNAL_SCANNER_USERNAME`
-- `SIGNAL_SCANNER_PASSWORD_HASH`
-
-Generate a hash with `auth.single_user.password_hash()` in a trusted environment. Do **not** commit the password or hash to source control.
-
-## Run
+### Live (real money) checklist
 
 ```bash
-pip install -r requirements.txt
-uvicorn main:app --reload
+EXECUTION_MODE=live_with_approval
+TABDEAL_API_KEY=...
+TABDEAL_API_SECRET=...
+OPENAI_API_KEY=...
+MAX_OPEN_POSITIONS=3
+MAX_POSITION_NOTIONAL_USDT=50
+MAX_RISK_PERCENT_PER_TRADE=1
+MAX_DAILY_LOSS_USDT=30
 ```
 
-Protected endpoints:
+Start with the smallest notional you can afford to lose.
 
-`POST /scan`
+## API (owner auth)
 
-`POST /best`
+- `POST /scan` `POST /best` `POST /ai/analyze`
+- `GET /execution/status` `GET /execution/pending`
+- `GET /execution/positions` `GET /execution/monitor`
+- `POST /execution/propose-open` `POST /execution/propose-close`
+- `POST /execution/approve` `POST /execution/reject`
 
-`POST /ai/analyze`
+## Security
 
-Example scan body:
-
-```json
-{
-  "symbol": "BTCUSDT",
-  "timeframe": "15m",
-  "capital": 10000000,
-  "risk_percent": 1
-}
-```
-
-The service remains signal-only. Real-money execution, API keys for exchange trading, and automated order placement are deliberately out of scope for this stage.
-
-## Private backend deployment
-
-A `render.yaml` blueprint is included for a private API deployment. After deployment, configure the backend secrets, including `OPENAI_API_KEY`, and use the resulting HTTPS API URL as the Flutter `AI_BACKEND_URL` build variable.
-
-Do not commit any real secret.
-
-## Roadmap
-
-1. Persistent signal history.
-2. Professional interactive charts.
-3. Historical-data backtesting.
-4. AI analysis across the ranked top opportunities.
-5. Alerts and richer mobile UI.
-6. Optional execution only after extensive validation and an explicit separate safety layer.
+- Trading keys only on the server — never in the APK
+- Single-owner HTTP Basic auth
+- Approve required for every order path
