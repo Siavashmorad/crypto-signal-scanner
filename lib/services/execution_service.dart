@@ -49,6 +49,21 @@ class ExecutionService {
     return list.cast<Map<String, dynamic>>();
   }
 
+  /// Live mark prices + unrealized PnL; may auto-propose CLOSE on TP/SL.
+  Future<Map<String, dynamic>> monitor({
+    required String username,
+    required String password,
+  }) async {
+    final uri = Uri.parse('$baseUrl/execution/monitor');
+    final res = await _client
+        .get(uri, headers: _headers(username, password))
+        .timeout(const Duration(seconds: 20));
+    if (res.statusCode != 200) {
+      throw StateError(_errorMessage(res));
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> proposeOpen({
     required String username,
     required String password,
@@ -146,7 +161,9 @@ class ExecutionService {
   String _errorMessage(http.Response res) {
     try {
       final body = jsonDecode(res.body);
-      if (body is Map && body['detail'] != null) return body['detail'].toString();
+      if (body is Map && body['detail'] != null) {
+        return body['detail'].toString();
+      }
     } catch (_) {}
     return 'HTTP ${res.statusCode}';
   }

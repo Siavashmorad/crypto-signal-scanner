@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../services/execution_service.dart';
+import 'pnl_dashboard.dart';
 
-/// Pending approvals: user must explicitly approve before any open/close runs.
+/// Pending approvals + live PnL dashboard.
 class ExecutionPanel extends StatefulWidget {
   final bool english;
   final String? username;
@@ -24,9 +25,9 @@ class _ExecutionPanelState extends State<ExecutionPanel> {
   String? modeNote;
   String? mode;
   List<Map<String, dynamic>> pending = [];
-  List<Map<String, dynamic>> positions = [];
   bool loading = false;
   String? error;
+  int pnlKey = 0;
 
   @override
   void initState() {
@@ -53,13 +54,13 @@ class _ExecutionPanelState extends State<ExecutionPanel> {
         username: widget.username!,
         password: widget.password!,
       );
-      // positions via same base path — reuse status client pattern through pending only if needed
       if (!mounted) return;
       setState(() {
         mode = status['mode']?.toString();
         modeNote = status['note']?.toString();
         pending = p;
         loading = false;
+        pnlKey++;
       });
     } catch (e) {
       if (!mounted) return;
@@ -81,8 +82,8 @@ class _ExecutionPanelState extends State<ExecutionPanel> {
         title: Text(en ? 'Confirm execution' : 'تأیید اجرا'),
         content: Text(
           en
-              ? 'Approve $act on $symbol?\nOnly after OK will the order run (paper or live depending on server mode).'
-              : 'تأیید $act برای $symbol؟\nفقط بعد از تأیید، اجرا انجام می‌شود (paper یا live بسته به تنظیم سرور).',
+              ? 'Approve $act on $symbol?\nReal or paper order runs only after OK.'
+              : 'تأیید $act برای $symbol؟\nفقط بعد از تأیید سفارش اجرا می‌شود.',
         ),
         actions: [
           TextButton(
@@ -96,7 +97,9 @@ class _ExecutionPanelState extends State<ExecutionPanel> {
         ],
       ),
     );
-    if (ok != true || widget.username == null || widget.password == null) return;
+    if (ok != true || widget.username == null || widget.password == null) {
+      return;
+    }
     try {
       await widget.execution.approve(
         username: widget.username!,
@@ -150,90 +153,109 @@ class _ExecutionPanelState extends State<ExecutionPanel> {
               ? 'Execution backend not configured in this APK'
               : 'بک‌اند اجرا در این APK تنظیم نشده'),
           subtitle: Text(en
-              ? 'Set AI_BACKEND_URL at build time to enable approve-gated trading.'
-              : 'برای فعال‌سازی معامله با تأیید، AI_BACKEND_URL را هنگام Build تنظیم کنید.'),
+              ? 'Set AI_BACKEND_URL at build time.'
+              : 'AI_BACKEND_URL را هنگام Build تنظیم کنید.'),
         ),
       );
     }
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    return Column(
+      children: [
+        PnlDashboard(
+          key: ValueKey('pnl-$pnlKey'),
+          english: en,
+          username: widget.username,
+          password: widget.password,
+          execution: widget.execution,
+          onPendingChanged: refresh,
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Text(
-                    en ? 'Approval-gated execution' : 'اجرا با تأیید شما',
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleMedium
-                        ?.copyWith(fontWeight: FontWeight.bold),
-                  ),
-                ),
-                IconButton(
-                  onPressed: loading ? null : refresh,
-                  icon: const Icon(Icons.refresh),
-                ),
-              ],
-            ),
-            if (mode != null)
-              Text(
-                en ? 'Mode: $mode' : 'حالت: $mode',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-            if (modeNote != null && modeNote!.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(modeNote!),
-              ),
-            if (error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(error!,
-                    style: TextStyle(color: Theme.of(context).colorScheme.error)),
-              ),
-            if (loading)
-              const Padding(
-                padding: EdgeInsets.all(12),
-                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-              ),
-            if (!loading && pending.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(en
-                    ? 'No pending actions. Propose open/close from a signal card.'
-                    : 'درخواست معلقی نیست. از کارت سیگنال درخواست باز/بستن بدهید.'),
-              ),
-            ...pending.map((a) {
-              final symbol = a['symbol']?.toString() ?? '';
-              final act = a['action']?.toString() ?? '';
-              final side = a['side']?.toString() ?? '';
-              final qty = a['quantity'];
-              return ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text('$act • $symbol • $side'),
-                subtitle: Text('qty: $qty'),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
+                Row(
                   children: [
-                    TextButton(
-                      onPressed: () => _reject(a),
-                      child: Text(en ? 'Reject' : 'رد'),
+                    Expanded(
+                      child: Text(
+                        en ? 'Pending approvals' : 'درخواست‌های منتظر تأیید',
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                      ),
                     ),
-                    FilledButton(
-                      onPressed: () => _confirmApprove(a),
-                      child: Text(en ? 'Approve' : 'تأیید'),
+                    IconButton(
+                      onPressed: loading ? null : refresh,
+                      icon: const Icon(Icons.refresh),
                     ),
                   ],
                 ),
-              );
-            }),
-          ],
+                if (mode != null)
+                  Text(
+                    en ? 'Mode: $mode' : 'حالت: $mode',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                if (modeNote != null && modeNote!.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(modeNote!),
+                  ),
+                if (error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      error!,
+                      style:
+                          TextStyle(color: Theme.of(context).colorScheme.error),
+                    ),
+                  ),
+                if (loading)
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child:
+                        Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                  ),
+                if (!loading && pending.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(en
+                        ? 'No pending actions.'
+                        : 'درخواست معلقی نیست.'),
+                  ),
+                ...pending.map((a) {
+                  final symbol = a['symbol']?.toString() ?? '';
+                  final act = a['action']?.toString() ?? '';
+                  final side = a['side']?.toString() ?? '';
+                  final qty = a['quantity'];
+                  final reason = a['reason']?.toString() ?? '';
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('$act • $symbol • $side'),
+                    subtitle: Text('qty: $qty${reason.isNotEmpty ? '\n$reason' : ''}'),
+                    isThreeLine: reason.isNotEmpty,
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextButton(
+                          onPressed: () => _reject(a),
+                          child: Text(en ? 'Reject' : 'رد'),
+                        ),
+                        FilledButton(
+                          onPressed: () => _confirmApprove(a),
+                          child: Text(en ? 'Approve' : 'تأیید'),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
         ),
-      ),
+      ],
     );
   }
 }
