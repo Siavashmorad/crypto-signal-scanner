@@ -26,25 +26,36 @@ jobs:
           rm -f test/widget_test.dart
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('android/app/src/main/AndroidManifest.xml')
-          text = p.read_text()
-          permission = '    <uses-permission android:name="android.permission.INTERNET" />\n'
+          import re
+
+          manifest = Path('android/app/src/main/AndroidManifest.xml')
+          text = manifest.read_text(encoding='utf-8')
           if 'android.permission.INTERNET' not in text:
               marker = '<manifest '
               start = text.find(marker)
               end = text.find('>', start)
               if start == -1 or end == -1:
                   raise SystemExit('AndroidManifest.xml: manifest element not found')
-              text = text[:end + 1] + '\n' + permission + text[end + 1:]
-              p.write_text(text)
-          print('Verified INTERNET permission in release manifest')
+              text = text[:end + 1] + '\n    <uses-permission android:name="android.permission.INTERNET" />' + text[end + 1:]
+          text, replacements = re.subn(
+              r'android:label="[^"]*"',
+              'android:label="سیگنال‌یاب"',
+              text,
+              count=1,
+          )
+          if replacements != 1:
+              raise SystemExit('AndroidManifest.xml: application label not found')
+          manifest.write_text(text, encoding='utf-8')
+          print('Verified INTERNET permission and application label: سیگنال‌یاب')
           PY
 
       - name: Get packages
         run: flutter pub get
 
       - name: Format source
-        run: dart format lib test
+        run: |
+          dart format lib test
+          dart format --output=none --set-exit-if-changed lib test
 
       - name: Static analysis
         run: flutter analyze --no-fatal-infos

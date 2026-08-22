@@ -1,3 +1,5 @@
+import 'dart:developer' as developer;
+
 import '../models/market_data.dart';
 import 'tabdeal_api.dart';
 
@@ -162,7 +164,13 @@ class ScannerService {
       final results = await Future.wait(batch.map((s) async {
         try {
           return await scanSymbol(s, timeframe);
-        } catch (_) {
+        } catch (error, stackTrace) {
+          developer.log(
+            'Failed to scan market $s',
+            name: 'ScannerService',
+            error: error,
+            stackTrace: stackTrace,
+          );
           return null;
         }
       }));
