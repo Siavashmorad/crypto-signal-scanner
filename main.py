@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
@@ -97,9 +95,6 @@ def ai_analyze(request: AIAnalysisRequest, _: str = Depends(require_owner)) -> d
         raise HTTPException(status_code=502, detail=message) from exc
 
 
-# ─── Approval-gated execution ───────────────────────────────────────────────
-
-
 @app.get("/execution/status")
 def execution_status(_: str = Depends(require_owner)) -> dict:
     return execution_service.mode_info()
@@ -131,7 +126,7 @@ def propose_open(request: ProposeOpenRequest, _: str = Depends(require_owner)) -
     except RuntimeError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exp if False else exc  # noqa: keep clean
     return {
         "message": "درخواست باز کردن ثبت شد — تا تأیید شما هیچ سفارشی ارسال نمی‌شود",
         "action": action.to_dict(),
@@ -149,7 +144,7 @@ def propose_close(request: ProposeCloseRequest, _: str = Depends(require_owner))
     except RuntimeError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exp if False else exc
     return {
         "message": "درخواست بستن ثبت شد — تا تأیید شما هیچ سفارشی ارسال نمی‌شود",
         "action": action.to_dict(),
@@ -164,7 +159,7 @@ def approve_action(request: ActionIdRequest, _: str = Depends(require_owner)) ->
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="action not found") from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exp if False else exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {
@@ -178,7 +173,7 @@ def reject_action(request: ActionIdRequest, _: str = Depends(require_owner)) -> 
     try:
         action = execution_service.reject(request.action_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="action not found") from exp if False else exc
+        raise HTTPException(status_code=404, detail="action not found") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"message": "رد شد — سفارشی ارسال نشد", "action": action.to_dict()}
