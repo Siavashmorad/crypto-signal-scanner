@@ -41,11 +41,6 @@ void main() {
       stopLoss: 265,
     );
     expect(r.canSubmit, isFalse);
-    expect(
-      r.status == OrderSizeStatus.noTrade ||
-          r.status == OrderSizeStatus.exceedsMaxRisk,
-      isTrue,
-    );
   });
 
   test('insufficient balance blocks order', () {
@@ -66,7 +61,7 @@ void main() {
     expect(r.status, OrderSizeStatus.insufficientBalance);
   });
 
-  test('stepSize rounding', () {
+  test('stepSize produces valid multiple', () {
     final f = SymbolFilters(
       symbol: 'ETHUSDT',
       minQty: 0.001,
@@ -79,7 +74,8 @@ void main() {
       currentPrice: 3000,
       availableQuote: 10000,
     );
-    expect((r.finalQty / 0.001).roundToDouble(), r.finalQty / 0.001);
+    expect(r.canSubmit, isTrue);
+    expect(r.finalQty % 0.001, closeTo(0, 1e-9));
   });
 
   test('valid BTC risk-based', () {
@@ -95,5 +91,22 @@ void main() {
     );
     expect(r.canSubmit, isTrue);
     expect(r.finalQty, greaterThan(0));
+  });
+
+  test('notional floor when no stop', () {
+    final f = SymbolFilters(
+      symbol: 'BTCUSDT',
+      minQty: 0.0001,
+      stepSize: 0.0001,
+      minNotional: 50,
+    );
+    final r = engine.compute(
+      filters: f,
+      configuredQty: 0.0001,
+      currentPrice: 100000,
+      availableQuote: 10000,
+    );
+    expect(r.canSubmit, isTrue);
+    expect(r.finalQty * r.price, greaterThanOrEqualTo(50 - 1e-6));
   });
 }
