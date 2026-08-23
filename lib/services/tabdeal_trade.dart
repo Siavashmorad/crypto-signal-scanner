@@ -3,8 +3,9 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
-/// Signed Tabdeal client on phone — matches official Python SDK signing.
-/// Spot only: POST /api/v1/order (not FAPI leverage positions).
+/// Signed Tabdeal client — HMAC matches official tabdeal-python:
+/// data_query = urlencode(params); HMAC-SHA256(secret, data_query).hexdigest()
+/// Spot only: POST /api/v1/order (not FAPI).
 class TabdealTradeClient {
   TabdealTradeClient({
     required this.apiKey,
@@ -20,19 +21,54 @@ class TabdealTradeClient {
 
   static const hosts = ['https://api1.tabdeal.org', 'https://api.tabdeal.org'];
 
-  bool get configured => apiKey.trim().isNotEmpty && apiSecret.trim().isNotEmpty;
+  /// Clock skew vs Tabdeal server (ms). Updated via /r/api/v1/time.
+  int _serverOffsetMs = 0;
 
-  /// Insertion-order query string (same as tabdeal-python urlencode). Do NOT sort.
-  String _sign(Map<String, String> params) {
-    final query = params.entries.map((e) => '${e.key}=${e.value}').join('&');
-    final digest =
-        Hmac(sha256, utf8.encode(apiSecret)).convert(utf8.encode(query));
-    return digest.toString();
+  bool get configured =>
+      apiKey.trim().isNotEmpty && apiSecret.trim().isNotEmpty;
+
+  /// Python urllib.parse.urlencode equivalent (quote_plus style).
+  /// Insertion order preserved — never sort keys.
+  String _urlEncode(Map<String, String> params) {
+    return params.entries.map((e) {
+      final k = Uri.encodeQueryComponent(e.key, utf8).replaceAll('%20', '+');
+      final v = Uri.encodeQueryComponent(e.value, utf8).replaceAll('%20', '+');
+      return '$k=$v';
+    }).join('&');
   }
 
-  /// Compact form preferred for orders: BTCIRT, ETHUSDT (no underscore).
+  String _hmacHex(String payload) {
+    final digest = Hmac(sha256, utf8.encode(apiSecret.trim()))
+        .convert(utf8.encode(payload));
+    return digest.toString(); // lowercase hex
+  }
+
   String _compact(String symbol) =>
       symbol.toUpperCase().replaceAll('_', '').replaceAll('-', '');
+
+  Future<void> syncServerTime() async {
+    try {
+      final uri = Uri.parse('${hosts.first}/r/api/v1/time');
+      final res = await _client
+          .get(uri, headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'SignalYab-Phone/1.3',
+          })
+          .timeout(const Duration(seconds: 12));
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        final raw = jsonDecode(res.body);
+        final server = int.tryParse('${raw is Map ? (raw['serverTime'] ?? raw['time'] ?? '') : ''}');
+        if (server != null && server > 0) {
+          _serverOffsetMs = server - DateTime.now().millisecondsSinceEpoch;
+        }
+      }
+    } catch (_) {
+      // keep previous offset
+    }
+  }
+
+  int _timestampMs() =>
+      DateTime.now().millisecondsSinceEpoch + _serverOffsetMs;
 
   Future<Map<String, dynamic>> _signed({
     required String method,
@@ -42,32 +78,45 @@ class TabdealTradeClient {
     Object? lastErr;
     for (final host in hosts) {
       try {
+        // Build params in stable insertion order (same as tabdeal-python dict).
         final params = <String, String>{};
         if (body != null) {
           for (final e in body.entries) {
             params[e.key] = e.value;
           }
         }
-        params['timestamp'] = '${DateTime.now().millisecondsSinceEpoch}';
+        params['timestamp'] = '${_timestampMs()}';
         params['recvWindow'] = '60000';
-        params['signature'] = _sign(params);
 
-        final uri = Uri.parse('$host$path');
+        // Sign WITHOUT signature field — exact Python urlencode + HMAC.
+        final dataQuery = _urlEncode(params);
+        final signature = _hmacHex(dataQuery);
+
+        // Body/query must be identical signed string + &signature=...
+        final fullQuery = '$dataQuery&signature=$signature';
+
         final headers = {
           'X-MBX-APIKEY': apiKey.trim(),
           'Content-Type': 'application/x-www-form-urlencoded',
           'Accept': 'application/json',
-          'User-Agent': 'Mozilla/5.0 SignalYab-Phone/1.2',
+          'User-Agent': 'SignalYab-Phone/1.3',
         };
 
         late http.Response res;
         if (method == 'POST') {
           res = await _client
-              .post(uri, headers: headers, body: params)
+              .post(
+                Uri.parse('$host$path'),
+                headers: headers,
+                body: fullQuery,
+              )
               .timeout(const Duration(seconds: 25));
         } else {
           res = await _client
-              .get(uri.replace(queryParameters: params), headers: headers)
+              .get(
+                Uri.parse('$host$path?$fullQuery'),
+                headers: headers,
+              )
               .timeout(const Duration(seconds: 25));
         }
 
@@ -93,6 +142,11 @@ class TabdealTradeClient {
               decoded['raw_body'] ??
               'HTTP ${res.statusCode}';
           lastErr = msg;
+          // On signature error, try time sync once then next host.
+          if ('$msg'.toLowerCase().contains('signature') ||
+              '$msg'.contains('1103')) {
+            await syncServerTime();
+          }
           continue;
         }
         return decoded;
@@ -103,30 +157,37 @@ class TabdealTradeClient {
     throw StateError('اتصال/سفارش تبدیل ناموفق: $lastErr');
   }
 
-  /// Spot MARKET order. Docs: send EITHER symbol OR tabdealSymbol — not both.
-  /// Official examples prefer compact symbol (e.g. BTCIRT).
+  /// Spot MARKET — matches official SDK fields:
+  /// side, type, quantity, price=0, stopPrice=0, symbol (compact only).
   Future<Map<String, dynamic>> marketOrder({
     required String symbol,
     required String side,
     required double quantity,
-  }) {
+  }) async {
+    await syncServerTime();
     final compact = _compact(symbol);
     return _signed(
       method: 'POST',
       path: '/api/v1/order',
       body: {
-        'symbol': compact,
         'side': side.toUpperCase(),
         'type': 'MARKET',
         'quantity': _qty(quantity),
+        // Official Python SDK always sends these for new_order:
+        'price': '0',
+        'stopPrice': '0',
+        'symbol': compact,
       },
     );
   }
 
-  Future<Map<String, dynamic>> account() =>
-      _signed(method: 'GET', path: '/r/api/v1/account');
+  Future<Map<String, dynamic>> account() async {
+    await syncServerTime();
+    return _signed(method: 'GET', path: '/r/api/v1/account');
+  }
 
-  Future<Map<String, dynamic>> openOrders({String? symbol}) {
+  Future<Map<String, dynamic>> openOrders({String? symbol}) async {
+    await syncServerTime();
     final body = <String, String>{};
     if (symbol != null) {
       body['symbol'] = _compact(symbol);
