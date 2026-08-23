@@ -43,6 +43,7 @@ class TabdealApi {
     'ETHUSDT',
     'SOLUSDT',
     'BNBUSDT',
+    'BCHUSDT',
   ];
 
   final http.Client client;
@@ -90,13 +91,12 @@ class TabdealApi {
     throw TabdealApiException(
       'API تبدیل در دسترس نیست.\n'
       '• اینترنت ایران (نه VPN خارجی)\n'
-      '• داده موبایل را یک‌بار خاموش/روشن کنید\n'
-      '• در تنظیمات DNS را روی خودکار بگذارید\n'
       'جزئیات فنی: $lastError',
     );
   }
 
-  /// Diagnose every host — shown in UI so user sees exact failure.
+  Future<dynamic> rawExchangeInfo() => _get('/r/api/v1/exchangeInfo');
+
   Future<List<HostProbeResult>> diagnose() async {
     final results = <HostProbeResult>[];
     const paths = ['/r/api/v1/time', '/r/api/v1/ping'];
@@ -250,5 +250,37 @@ class TabdealApi {
       } catch (_) {}
     }
     return {'bids': [], 'asks': []};
+  }
+
+  /// Build OHLCV candles from real trades (Tabdeal has no public kline in spot docs).
+  List<Candle> candlesFromTrades(List<TradePoint> trades, Duration tf) {
+    if (trades.isEmpty) return const [];
+    final sorted = [...trades]..sort((a, b) => a.timestampMs.compareTo(b.timestampMs));
+    final bucketMs = tf.inMilliseconds;
+    final map = <int, Candle>{};
+    for (final t in sorted) {
+      final b = t.timestampMs - (t.timestampMs % bucketMs);
+      final c = map[b];
+      if (c == null) {
+        map[b] = Candle(
+          timestampMs: b,
+          open: t.price,
+          high: t.price,
+          low: t.price,
+          close: t.price,
+          volume: t.quantity,
+        );
+      } else {
+        map[b] = Candle(
+          timestampMs: b,
+          open: c.open,
+          high: t.price > c.high ? t.price : c.high,
+          low: t.price < c.low ? t.price : c.low,
+          close: t.price,
+          volume: c.volume + t.quantity,
+        );
+      }
+    }
+    return map.values.toList()..sort((a, b) => a.timestampMs.compareTo(b.timestampMs));
   }
 }

@@ -3,10 +3,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'models/market_data.dart';
 import 'services/ai_analyst.dart';
 import 'services/local_trade_store.dart';
+import 'services/order_sizing.dart';
 import 'services/scanner_service.dart';
+import 'services/symbol_rules_service.dart';
 import 'services/tabdeal_api.dart';
 import 'services/tabdeal_trade.dart';
 import 'widgets/connection_diagnose_page.dart';
+import 'widgets/market_chart_page.dart';
 import 'widgets/trade_settings_page.dart';
 
 const ownerUsername = 'Siavashmorad';
@@ -221,9 +224,12 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final api = TabdealApi();
   late final scanner = ScannerService(api);
+  late final rules = SymbolRulesService(api);
+  final sizing = OrderSizingEngine();
   final ai = AiAnalystService();
   final tradeStore = LocalTradeStore();
   final history = <MarketSignal>[];
+  final Map<String, Map<String, dynamic>> lastFills = {};
   bool loading = false;
   bool checkingLink = true;
   bool tabdealLinked = false;
@@ -266,6 +272,17 @@ class _HomePageState extends State<HomePage> {
     await _checkTabdeal();
   }
 
+  Future<void> _openChart(MarketSignal s) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => MarketChartPage(
+        signal: s,
+        api: api,
+        english: widget.english,
+        lastOrderFill: lastFills[s.symbol],
+      ),
+    ));
+  }
+
   Future<void> _checkTabdeal() async {
     setState(() => checkingLink = true);
     final ok = await api.ping();
@@ -275,11 +292,11 @@ class _HomePageState extends State<HomePage> {
       checkingLink = false;
       status = ok
           ? (widget.english
-              ? 'Tabdeal OK (${api.activeHost}) — tap for details'
-              : 'تبدیل وصل است (${api.activeHost}) — برای جزئیات بزنید')
+              ? 'Tabdeal OK (${api.activeHost})'
+              : 'تبدیل وصل است (${api.activeHost})')
           : (widget.english
-              ? 'Tabdeal blocked — tap here for full test (turn off foreign VPN)'
-              : 'تبدیل قطع است — اینجا بزنید برای تست کامل (VPN خارجی را خاموش کنید)');
+              ? 'Tabdeal offline — tap to diagnose'
+              : 'تبدیل قطع — برای تست بزنید');
     });
   }
 
@@ -317,13 +334,6 @@ class _HomePageState extends State<HomePage> {
             : (widget.english
                 ? '${result.length} setups in ${secs}s ($srcLabel)'
                 : '${result.length} فرصت در $secsث ($srcLabel)');
-        for (final item in result.take(20)) {
-          if (!history.any((h) =>
-              h.symbol == item.symbol &&
-              h.timestamp.difference(item.timestamp).inMinutes.abs() < 2)) {
-            history.add(item);
-          }
-        }
       });
     } catch (e) {
       if (!mounted) return;
@@ -375,16 +385,54 @@ class _HomePageState extends State<HomePage> {
       ));
       return;
     }
-    final qty = await tradeStore.defaultQty();
+
+    final configured = await tradeStore.defaultQty();
+    final filters = await rules.filtersFor(signal.symbol);
+    final size = sizing.compute(
+      filters: filters,
+      configuredQty: configured,
+      currentPrice: signal.entry,
+      // balance unknown without private call — skip unless user sets max risk via qty only
+      availableQuote: 0,
+      maxRiskQuote: 0,
+    );
+
+    if (!size.canSubmit) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(en ? 'Cannot place order' : 'امکان ارسال سفارش نیست'),
+          content: Text(size.message),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(en ? 'OK' : 'باشه')),
+          ],
+        ),
+      );
+      return;
+    }
+
     final isLong = signal.side.toUpperCase() == 'LONG';
     final side = isOpen
         ? (isLong ? 'BUY' : 'SELL')
         : (isLong ? 'SELL' : 'BUY');
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(en ? 'Approve order' : 'تأیید سفارش'),
-        content: Text('$side ${signal.symbol} qty $qty'),
+        content: Text(
+          '${signal.symbol}  $side MARKET\n'
+          '${en ? 'Requested' : 'درخواستی'}: ${size.requestedQty}\n'
+          '${en ? 'Exchange min qty' : 'حداقل صرافی'}: ${size.minQty}\n'
+          '${en ? 'Min notional' : 'حداقل ارزش'}: ${size.minNotional}\n'
+          '${en ? 'Final qty' : 'حجم نهایی'}: ${size.finalQty}\n'
+          '${en ? 'Approx value' : 'ارزش تقریبی'}: ${size.approxNotional.toStringAsFixed(2)}\n'
+          '${size.message}\n\n'
+          '${en ? 'Spot only — SHORT means SELL asset, not leveraged short.' : 'فقط اسپات — SHORT یعنی فروش دارایی، نه شورت اهرمی.'}',
+        ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -396,6 +444,7 @@ class _HomePageState extends State<HomePage> {
       ),
     );
     if (ok != true) return;
+
     try {
       final client = TabdealTradeClient(
         apiKey: await tradeStore.apiKey(),
@@ -404,12 +453,15 @@ class _HomePageState extends State<HomePage> {
       final res = await client.marketOrder(
         symbol: signal.symbol,
         side: side,
-        quantity: qty,
+        quantity: size.finalQty,
       );
       client.dispose();
+      lastFills[signal.symbol] = res;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('${res['orderId'] ?? res['order_id'] ?? res}'),
+        content: Text(
+          '${en ? 'Order' : 'سفارش'}: ${res['orderId'] ?? res['order_id'] ?? res['status'] ?? 'ok'}',
+        ),
       ));
     } catch (e) {
       if (!mounted) return;
@@ -441,7 +493,6 @@ class _HomePageState extends State<HomePage> {
           title: Text(en ? 'SignalYab' : 'سیگنال‌یاب'),
           actions: [
             IconButton(
-              tooltip: en ? 'Diagnose' : 'تشخیص اتصال',
               onPressed: _openDiagnose,
               icon: const Icon(Icons.network_check),
             ),
@@ -489,9 +540,8 @@ class _HomePageState extends State<HomePage> {
                       ? (en ? 'Checking...' : 'در حال تست...')
                       : (tabdealLinked
                           ? (en ? 'Tabdeal connected' : 'تبدیل متصل')
-                          : (en ? 'Tabdeal offline — TAP' : 'تبدیل قطع — اینجا بزنید'))),
+                          : (en ? 'Tabdeal offline' : 'تبدیل قطع'))),
                   subtitle: Text(status ?? ''),
-                  trailing: const Icon(Icons.chevron_left),
                 ),
               ),
               Card(
@@ -569,6 +619,8 @@ class _HomePageState extends State<HomePage> {
                         signal: s,
                         en: en,
                         money: money,
+                        executed: lastFills.containsKey(s.symbol),
+                        onChart: () => _openChart(s),
                         onAi: () => analyzeWithAi(s),
                         onOpen: () => placeOnPhone(s, isOpen: true),
                         onClose: () => placeOnPhone(s, isOpen: false),
@@ -594,10 +646,12 @@ class _HomePageState extends State<HomePage> {
 class _SignalCard extends StatelessWidget {
   final MarketSignal signal;
   final bool en;
+  final bool executed;
   final String Function(double) money;
   final VoidCallback? onAi;
   final VoidCallback? onOpen;
   final VoidCallback? onClose;
+  final VoidCallback? onChart;
   const _SignalCard({
     required this.signal,
     required this.en,
@@ -605,6 +659,8 @@ class _SignalCard extends StatelessWidget {
     required this.onAi,
     required this.onOpen,
     required this.onClose,
+    required this.onChart,
+    this.executed = false,
   });
 
   @override
@@ -620,18 +676,37 @@ class _SignalCard extends StatelessWidget {
                   Text(signal.symbol,
                       style: const TextStyle(
                           fontWeight: FontWeight.bold, fontSize: 18)),
-                  Chip(label: Text(signal.side)),
+                  Chip(
+                    label: Text(executed
+                        ? (en ? 'FILLED' : 'اجرا شده')
+                        : signal.side),
+                  ),
                 ],
               ),
               Text('${en ? 'Conf' : 'اطمینان'}: ${signal.confidence.toStringAsFixed(0)}%'),
               Text('${en ? 'Entry' : 'ورود'}: ${money(signal.entry)}'),
               Text('SL: ${money(signal.stopLoss)}  TP1: ${money(signal.tp1)}'),
               const SizedBox(height: 8),
-              FilledButton.tonalIcon(
-                onPressed: onAi,
-                icon: const Icon(Icons.psychology),
-                label: Text(en ? 'Analyst' : 'تحلیلگر'),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      onPressed: onChart,
+                      icon: const Icon(Icons.show_chart),
+                      label: Text(en ? 'Chart' : 'نمودار'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      onPressed: onAi,
+                      icon: const Icon(Icons.psychology),
+                      label: Text(en ? 'AI' : 'تحلیل'),
+                    ),
+                  ),
+                ],
               ),
+              const SizedBox(height: 8),
               Row(
                 children: [
                   Expanded(
@@ -689,6 +764,7 @@ class _AiAnalysisCard extends StatelessWidget {
           children: [
             Text(r.summary),
             Text('${r.recommendation} | ${r.trend} | ${r.riskLevel}'),
+            Text('${en ? 'Source' : 'منبع'}: ${r.source}'),
           ],
         ),
       ),
