@@ -176,9 +176,11 @@ class _LoginPageState extends State<LoginPage> {
                       if (error != null)
                         Padding(
                           padding: const EdgeInsets.only(top: 12),
-                          child: Text(error!,
-                              style: TextStyle(
-                                  color: Theme.of(context).colorScheme.error)),
+                          child: Text(
+                            error!,
+                            style: TextStyle(
+                                color: Theme.of(context).colorScheme.error),
+                          ),
                         ),
                       const SizedBox(height: 20),
                       SizedBox(
@@ -189,13 +191,6 @@ class _LoginPageState extends State<LoginPage> {
                           icon: const Icon(Icons.login),
                           label: Text(widget.english ? 'Sign in' : 'ورود'),
                         ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        widget.english
-                            ? 'Password must be at least 6 characters.'
-                            : 'رمز عبور حداقل ۶ کاراکتر',
-                        style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
                   ),
@@ -264,15 +259,13 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       tabdealLinked = ok;
       checkingLink = false;
-      if (ok) {
-        status = widget.english
-            ? 'Connected to Tabdeal (${api.activeHost})'
-            : 'متصل به تبدیل (${api.activeHost})';
-      } else {
-        status = widget.english
-            ? 'Cannot reach Tabdeal. Check mobile data/Wi‑Fi.'
-            : 'اتصال به تبدیل برقرار نشد. اینترنت موبایل را چک کنید.';
-      }
+      status = ok
+          ? (widget.english
+              ? 'Connected to Tabdeal (${api.activeHost})'
+              : 'متصل به تبدیل (${api.activeHost})')
+          : (widget.english
+              ? 'Cannot reach Tabdeal. Check mobile data/Wi-Fi.'
+              : 'اتصال به تبدیل برقرار نشد. اینترنت را چک کنید.');
     });
   }
 
@@ -302,7 +295,7 @@ class _HomePageState extends State<HomePage> {
         status = result.isEmpty
             ? (widget.english
                 ? 'Connected. No setup matched filters (${secs}s).'
-                : 'متصل شد. در ${secs} ثانیه سیگنال تأییدشده‌ای پیدا نشد.')
+                : 'متصل شد. در $secs ثانیه سیگنال تأییدشده‌ای پیدا نشد.')
             : (widget.english
                 ? '${result.length} setups in ${secs}s via ${api.activeHost}'
                 : '${result.length} فرصت در ${secs}ث از ${api.activeHost}');
@@ -355,23 +348,19 @@ class _HomePageState extends State<HomePage> {
   Future<void> proposeOpen(MarketSignal signal) async {
     final en = widget.english;
     if (!execution.configured) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(en
-              ? 'Trading backend not in this APK (scan+AI work offline).'
-              : 'بک‌اند معامله در این APK نیست؛ اسکن و تحلیل کار می‌کند.'),
-        ),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(en
+            ? 'Trading backend not in this APK (scan+analyst work).'
+            : 'بک‌اند معامله در این APK نیست؛ اسکن و تحلیل کار می‌کند.'),
+      ));
       return;
     }
-    final qty = 0.001;
+    if (widget.aiUsername == null || widget.aiPassword == null) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(en ? 'Request OPEN' : 'درخواست باز کردن'),
-        content: Text(en
-            ? 'Pending OPEN for ${signal.symbol}. Approve below to execute.'
-            : 'درخواست OPEN برای ${signal.symbol}. برای اجرا پایین تأیید کنید.'),
+        content: Text('${signal.symbol} ${signal.side}'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -382,28 +371,19 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
     );
-    if (ok != true || widget.aiUsername == null || widget.aiPassword == null) {
-      return;
-    }
+    if (ok != true) return;
     try {
       await execution.proposeOpen(
         username: widget.aiUsername!,
         password: widget.aiPassword!,
         symbol: signal.symbol,
         side: signal.side,
-        quantity: qty,
+        quantity: 0.001,
         entry: signal.entry,
         stopLoss: signal.stopLoss,
         takeProfit: signal.tp1,
       );
-      if (mounted) {
-        setState(() => pendingRefreshToken++);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(
-                  en ? 'Pending OPEN — approve below' : 'ثبت شد — پایین تأیید کنید')),
-        );
-      }
+      if (mounted) setState(() => pendingRefreshToken++);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -426,13 +406,7 @@ class _HomePageState extends State<HomePage> {
         symbol: signal.symbol,
       );
       if (mounted) setState(() => pendingRefreshToken++);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString().replaceFirst('Bad state: ', ''))),
-        );
-      }
-    }
+    } catch (_) {}
   }
 
   String money(double value) {
@@ -458,7 +432,6 @@ class _HomePageState extends State<HomePage> {
           title: Text(en ? 'SignalYab' : 'سیگنال‌یاب'),
           actions: [
             IconButton(
-              tooltip: en ? 'Recheck Tabdeal' : 'تست اتصال تبدیل',
               onPressed: checkingLink ? null : _checkTabdeal,
               icon: Icon(
                 tabdealLinked ? Icons.cloud_done : Icons.cloud_off,
@@ -488,8 +461,8 @@ class _HomePageState extends State<HomePage> {
             children: [
               Card(
                 color: tabdealLinked
-                    ? Colors.green.withValues(alpha: 0.08)
-                    : Colors.orange.withValues(alpha: 0.08),
+                    ? Colors.green.withOpacity(0.08)
+                    : Colors.orange.withOpacity(0.08),
                 child: ListTile(
                   leading: checkingLink
                       ? const SizedBox(
@@ -522,10 +495,10 @@ class _HomePageState extends State<HomePage> {
                             .titleLarge
                             ?.copyWith(fontWeight: FontWeight.bold),
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 8),
                       Text(en
-                          ? 'Top ~30 liquid markets, parallel fetch from Tabdeal.'
-                          : 'حدود ۳۰ بازار نقدشونده، دریافت موازی از تبدیل.'),
+                          ? 'Top ~30 liquid markets from Tabdeal.'
+                          : 'حدود ۳۰ بازار نقدشونده از تبدیل.'),
                       const SizedBox(height: 16),
                       Row(
                         children: [
@@ -551,7 +524,7 @@ class _HomePageState extends State<HomePage> {
                               onPressed: loading ? null : scan,
                               icon: const Icon(Icons.radar),
                               label: Text(loading
-                                  ? (en ? '...' : '...')
+                                  ? '...'
                                   : (en ? 'Scan' : 'اسکن')),
                             ),
                           ),
@@ -635,11 +608,13 @@ class _SignalCard extends StatelessWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(signal.symbol,
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleLarge
-                          ?.copyWith(fontWeight: FontWeight.bold)),
+                  Text(
+                    signal.symbol,
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
                   Chip(label: Text(signal.side)),
                 ],
               ),
