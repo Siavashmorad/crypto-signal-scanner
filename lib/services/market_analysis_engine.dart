@@ -43,10 +43,10 @@ class MarketAnalysisEngine {
     return trs.skip(trs.length - period).reduce((a, b) => a + b) / period;
   }
 
-  /// Swing structure: HH/HL vs LH/LL over last swings.
   StructureSnapshot structure(List<Candle> candles) {
     if (candles.length < 20) {
-      return const StructureSnapshot(available: false, note: 'داده ساختار کافی نیست');
+      return const StructureSnapshot(
+          available: false, note: 'داده ساختار کافی نیست');
     }
     final highs = <double>[];
     final lows = <double>[];
@@ -85,15 +85,46 @@ class MarketAnalysisEngine {
       label = 'MIXED';
     }
 
+    // Simple BOS / CHOCH from last close vs prior swing
+    final last = candles.last.close;
+    final priorHigh = highs[highs.length - 2];
+    final priorLow = lows[lows.length - 2];
+    String event = 'NONE';
+    if (last > priorHigh && (lh || ll)) {
+      event = 'BOS_UP';
+    } else if (last < priorLow && (hh || hl)) {
+      event = 'BOS_DOWN';
+    } else if (last > priorHigh && label == 'LH_LL') {
+      event = 'CHOCH_BULL';
+    } else if (last < priorLow && label == 'HH_HL') {
+      event = 'CHOCH_BEAR';
+    }
+
+    // Volatility regime via ATR vs price
+    final atr = _atr(candles, 14);
+    final atrPct = last > 0 ? (atr / last) * 100 : 0;
+    final volRegime =
+        atrPct >= 2.5 ? 'HIGH' : (atrPct >= 1.2 ? 'MEDIUM' : 'LOW');
+
     final support = lows.last;
     final resistance = highs.last;
     return StructureSnapshot(
       available: true,
       label: label,
+      event: event,
       support: support,
       resistance: resistance,
-      note: 'ساختار: $label | S=${support.toStringAsFixed(4)} R=${resistance.toStringAsFixed(4)}',
+      volatilityRegime: volRegime,
+      note:
+          'ساختار: $label $event | S=${support.toStringAsFixed(4)} R=${resistance.toStringAsFixed(4)} vol=$volRegime',
     );
+  }
+
+  /// Suggested trailing distance (analysis only — not placed on exchange).
+  double? suggestedTrailDistance(List<Candle> candles) {
+    final atr = _atr(candles, 14);
+    if (atr <= 0) return null;
+    return atr * 1.5;
   }
 
   TfSnapshot analyzeTf(List<Candle> candles, String label) {
@@ -127,7 +158,6 @@ class MarketAnalysisEngine {
       bias = 'NEUTRAL';
     }
 
-    // Structure reinforces bias
     if (struct.available) {
       if (struct.label == 'HH_HL' && bias != 'BEARISH') bias = 'BULLISH';
       if (struct.label == 'LH_LL' && bias != 'BULLISH') bias = 'BEARISH';
@@ -144,7 +174,8 @@ class MarketAnalysisEngine {
       last: last,
       volumeRising: volRising,
       structure: struct,
-      note: '$label: $bias RSI=${rsi.toStringAsFixed(0)} ${struct.available ? struct.label : ''}',
+      note:
+          '$label: $bias RSI=${rsi.toStringAsFixed(0)} ${struct.available ? struct.label : ''}',
     );
   }
 
@@ -178,7 +209,6 @@ class MarketAnalysisEngine {
     final missing = <String>[];
     var total = 50.0;
 
-    // Multi-TF weights: 4h structure-ish, 1h trend, 15m momentum, 5m entry
     double mtf = 0;
     for (final s in available) {
       final w = switch (s.label) {
@@ -202,8 +232,12 @@ class MarketAnalysisEngine {
         reasons.add('${s.label}: حجم افزایشی');
       }
       if (s.structure.available) {
-        breakdown['structure'] = (breakdown['structure'] ?? 0) +
-            (s.structure.label == (isLong ? 'HH_HL' : 'LH_LL') ? 4 : 0);
+        final align =
+            s.structure.label == (isLong ? 'HH_HL' : 'LH_LL') ? 4.0 : 0.0;
+        breakdown['structure'] = (breakdown['structure'] ?? 0) + align;
+        if (s.structure.event != 'NONE') {
+          reasons.add('${s.label} ${s.structure.event}');
+        }
         reasons.add(s.structure.note);
       }
     }
@@ -214,9 +248,10 @@ class MarketAnalysisEngine {
       missing.add(s.label);
     }
 
-    // Conflict: higher TF vs lower TF → WAIT bias
-    final higher = available.where((s) => s.label == '1h' || s.label == '4h').toList();
-    final lower = available.where((s) => s.label == '5m' || s.label == '15m').toList();
+    final higher =
+        available.where((s) => s.label == '1h' || s.label == '4h').toList();
+    final lower =
+        available.where((s) => s.label == '5m' || s.label == '15m').toList();
     if (higher.isNotEmpty && lower.isNotEmpty) {
       final hb = higher.first.bias;
       final lb = lower.first.bias;
@@ -227,17 +262,20 @@ class MarketAnalysisEngine {
       }
     }
 
-    // Order book
     if (depth != null) {
       final bids = depth['bids'];
       final asks = depth['asks'];
       if (bids is List && asks is List && bids.isNotEmpty && asks.isNotEmpty) {
         double b = 0, a = 0;
         for (final row in bids.take(10)) {
-          if (row is List && row.length >= 2) b += double.tryParse('${row[1]}') ?? 0;
+          if (row is List && row.length >= 2) {
+            b += double.tryParse('${row[1]}') ?? 0;
+          }
         }
         for (final row in asks.take(10)) {
-          if (row is List && row.length >= 2) a += double.tryParse('${row[1]}') ?? 0;
+          if (row is List && row.length >= 2) {
+            a += double.tryParse('${row[1]}') ?? 0;
+          }
         }
         if (b + a > 0) {
           final imb = (b - a) / (b + a);
@@ -253,7 +291,6 @@ class MarketAnalysisEngine {
       missing.add('orderbook');
     }
 
-    // R/R bonus
     if (signal.riskReward >= 2) {
       breakdown['rr'] = 8;
       total += 8;
@@ -274,7 +311,8 @@ class MarketAnalysisEngine {
     if (total < 58) direction = 'WAIT';
 
     final atrPct = signal.entry > 0 ? (signal.atr / signal.entry) * 100 : 0;
-    final risk = atrPct >= 2.5 ? 'HIGH' : (atrPct >= 1.2 ? 'MEDIUM' : 'CONTROLLED');
+    final risk =
+        atrPct >= 2.5 ? 'HIGH' : (atrPct >= 1.2 ? 'MEDIUM' : 'CONTROLLED');
 
     return ScoredAnalysis(
       direction: direction,
@@ -292,15 +330,19 @@ class MarketAnalysisEngine {
 class StructureSnapshot {
   final bool available;
   final String label;
+  final String event;
   final double support;
   final double resistance;
+  final String volatilityRegime;
   final String note;
 
   const StructureSnapshot({
     this.available = true,
     this.label = 'UNKNOWN',
+    this.event = 'NONE',
     this.support = 0,
     this.resistance = 0,
+    this.volatilityRegime = 'UNKNOWN',
     this.note = '',
   });
 }
