@@ -12,7 +12,7 @@ class MarketChartPage extends StatefulWidget {
   final MarketSignal signal;
   final TabdealApi api;
   final bool english;
-  final Map<String, dynamic>? lastOrderFill; // real fill if executed
+  final Map<String, dynamic>? lastOrderFill;
 
   const MarketChartPage({
     super.key,
@@ -50,7 +50,8 @@ class _MarketChartPageState extends State<MarketChartPage> {
   void initState() {
     super.initState();
     _load();
-    _poll = Timer.periodic(const Duration(seconds: 25), (_) => _load(silent: true));
+    // REST polling ~12s (Tabdeal spot WS exists for depth; trades still via REST)
+    _poll = Timer.periodic(const Duration(seconds: 12), (_) => _load(silent: true));
   }
 
   @override
@@ -60,16 +61,17 @@ class _MarketChartPageState extends State<MarketChartPage> {
   }
 
   Future<void> _load({bool silent = false}) async {
-    if (!silent && mounted) setState(() {
-      loading = true;
-      error = null;
-    });
+    if (!silent && mounted) {
+      setState(() {
+        loading = true;
+        error = null;
+      });
+    }
     try {
       final trades = await widget.api.trades(widget.signal.symbol, limit: 500);
       final c = widget.api.candlesFromTrades(trades, _duration);
       final d = await widget.api.depth(widget.signal.symbol);
 
-      // Multi-TF from same trade stream
       final byTf = <String, List<Candle>>{
         '5m': widget.api.candlesFromTrades(trades, const Duration(minutes: 5)),
         '15m': widget.api.candlesFromTrades(trades, const Duration(minutes: 15)),
@@ -89,7 +91,9 @@ class _MarketChartPageState extends State<MarketChartPage> {
         depth = d;
         analysis = scored;
         loading = false;
-        error = c.isEmpty ? (widget.english ? 'Not enough trades' : 'معامله کافی نیست') : null;
+        error = c.isEmpty
+            ? (widget.english ? 'Not enough trades' : 'معامله کافی نیست')
+            : null;
       });
     } catch (e) {
       if (!mounted) return;
@@ -116,7 +120,8 @@ class _MarketChartPageState extends State<MarketChartPage> {
         appBar: AppBar(
           title: Text('${s.symbol} — ${en ? 'Chart' : 'نمودار'}'),
           actions: [
-            IconButton(onPressed: loading ? null : _load, icon: const Icon(Icons.refresh)),
+            IconButton(
+                onPressed: loading ? null : _load, icon: const Icon(Icons.refresh)),
           ],
         ),
         body: ListView(
@@ -128,9 +133,9 @@ class _MarketChartPageState extends State<MarketChartPage> {
                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
                 subtitle: Text(
                   '${en ? 'Price' : 'قیمت'}: ${px.toStringAsFixed(5)}  ·  '
-                  '${isExecuted ? (en ? 'OPEN POSITION' : 'پوزیشن باز') : (en ? 'SIGNAL / NOT EXECUTED' : 'سیگنال / اجرا نشده')}',
+                  '${isExecuted ? (en ? 'OPEN POSITION (SPOT)' : 'پوزیشن اسپات باز') : (en ? 'SIGNAL / NOT EXECUTED' : 'سیگنال / اجرا نشده')}',
                 ),
-                trailing: Chip(label: Text(s.side)),
+                trailing: Chip(label: Text('SPOT ${s.side}')),
               ),
             ),
             SingleChildScrollView(
@@ -172,16 +177,80 @@ class _MarketChartPageState extends State<MarketChartPage> {
                       tp1: s.tp1,
                       tp2: s.tp2,
                       tp3: s.tp3,
-                      isLong: s.side.toUpperCase() == 'LONG',
                     ),
-                    child: Container(),
+                    child: const SizedBox.expand(),
                   ),
                 ),
               ),
             const SizedBox(height: 8),
+            _orderBookCard(en),
             _levelsCard(en, s, px),
             if (analysis != null) _aiCard(en, analysis!),
             if (isExecuted) _fillCard(en, widget.lastOrderFill!),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _orderBookCard(bool en) {
+    final d = depth;
+    if (d == null) {
+      return Card(
+        child: ListTile(
+          title: Text(en ? 'Order book' : 'اردربوک'),
+          subtitle: Text(en ? 'Unavailable' : 'در دسترس نیست'),
+        ),
+      );
+    }
+    final bids = d['bids'];
+    final asks = d['asks'];
+    if (bids is! List || asks is! List || bids.isEmpty || asks.isEmpty) {
+      return Card(
+        child: ListTile(
+          title: Text(en ? 'Order book' : 'اردربوک'),
+          subtitle: Text(en ? 'Unavailable' : 'در دسترس نیست'),
+        ),
+      );
+    }
+    double bidVol = 0, askVol = 0;
+    double? bestBid, bestAsk;
+    for (final row in bids.take(10)) {
+      if (row is List && row.length >= 2) {
+        final p = double.tryParse('${row[0]}');
+        final q = double.tryParse('${row[1]}') ?? 0;
+        bidVol += q;
+        bestBid ??= p;
+      }
+    }
+    for (final row in asks.take(10)) {
+      if (row is List && row.length >= 2) {
+        final p = double.tryParse('${row[0]}');
+        final q = double.tryParse('${row[1]}') ?? 0;
+        askVol += q;
+        bestAsk ??= p;
+      }
+    }
+    final sum = bidVol + askVol;
+    final imb = sum > 0 ? (bidVol - askVol) / sum : 0.0;
+    final spread =
+        (bestBid != null && bestAsk != null) ? (bestAsk - bestBid) : null;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(en ? 'Order book (real)' : 'اردربوک واقعی',
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text('Bid vol: ${bidVol.toStringAsFixed(3)}  Ask vol: ${askVol.toStringAsFixed(3)}'),
+            Text(
+              'Imbalance: ${(imb * 100).toStringAsFixed(1)}%  '
+              '${imb > 0.05 ? 'BUY' : (imb < -0.05 ? 'SELL' : 'NEUTRAL')}',
+            ),
+            if (bestBid != null && bestAsk != null)
+              Text('Best ${bestBid.toStringAsFixed(4)} / ${bestAsk.toStringAsFixed(4)}'
+                  '${spread != null ? '  spread ${spread.toStringAsFixed(4)}' : ''}'),
           ],
         ),
       ),
@@ -202,7 +271,8 @@ class _MarketChartPageState extends State<MarketChartPage> {
                 style: const TextStyle(fontWeight: FontWeight.bold)),
             Text('ENTRY ${s.entry.toStringAsFixed(5)}'),
             Text('SL ${s.stopLoss.toStringAsFixed(5)}'),
-            Text('TP1 ${s.tp1.toStringAsFixed(5)}  TP2 ${s.tp2.toStringAsFixed(5)}  TP3 ${s.tp3.toStringAsFixed(5)}'),
+            Text(
+                'TP1 ${s.tp1.toStringAsFixed(5)}  TP2 ${s.tp2.toStringAsFixed(5)}  TP3 ${s.tp3.toStringAsFixed(5)}'),
             Text('R/R 1:${s.riskReward.toStringAsFixed(1)}'),
             Text(
               '${en ? 'Dist Entry' : 'فاصله ورود'}: ${distEntry.toStringAsFixed(2)}%  '
@@ -227,11 +297,14 @@ class _MarketChartPageState extends State<MarketChartPage> {
             Text('${en ? 'Score' : 'امتیاز'}: ${a.score.toStringAsFixed(0)}/100'),
             Text('${en ? 'Confidence' : 'اعتماد'}: ${a.confidence}%'),
             Text('${en ? 'Risk' : 'ریسک'}: ${a.riskLevel}'),
+            if (a.breakdown.isNotEmpty)
+              Text(a.breakdown.entries
+                  .map((e) => '${e.key}:${e.value.toStringAsFixed(1)}')
+                  .join(' · ')),
             if (a.missing.isNotEmpty)
               Text('${en ? 'Missing data' : 'داده ناقص'}: ${a.missing.join(', ')}'),
             const Divider(),
             ...a.reasons.map((r) => Text('• $r')),
-            ...a.snapshots.where((s) => s.available).map((s) => Text(s.note)),
           ],
         ),
       ),
@@ -242,7 +315,7 @@ class _MarketChartPageState extends State<MarketChartPage> {
     return Card(
       color: Colors.green.withOpacity(0.08),
       child: ListTile(
-        title: Text(en ? 'Real fill from Tabdeal' : 'اجرای واقعی از تبدیل'),
+        title: Text(en ? 'Real SPOT fill from Tabdeal' : 'اجرای واقعی اسپات از تبدیل'),
         subtitle: Text(
           'orderId: ${fill['orderId'] ?? fill['order_id'] ?? '-'}\n'
           'executedQty: ${fill['executedQty'] ?? fill['executed_qty'] ?? '-'}\n'
@@ -256,7 +329,6 @@ class _MarketChartPageState extends State<MarketChartPage> {
 class _CandlePainter extends CustomPainter {
   final List<Candle> candles;
   final double entry, sl, tp1, tp2, tp3;
-  final bool isLong;
 
   _CandlePainter({
     required this.candles,
@@ -265,7 +337,6 @@ class _CandlePainter extends CustomPainter {
     required this.tp1,
     required this.tp2,
     required this.tp3,
-    required this.isLong,
   });
 
   @override
@@ -283,8 +354,7 @@ class _CandlePainter extends CustomPainter {
     }
     final range = (maxP - minP).abs() < 1e-12 ? 1.0 : (maxP - minP);
 
-    double yOf(double price) =>
-        pad + chartH * (1 - (price - minP) / range);
+    double yOf(double price) => pad + chartH * (1 - (price - minP) / range);
 
     final bg = Paint()..color = const Color(0xFF12141C);
     canvas.drawRect(Offset.zero & size, bg);
