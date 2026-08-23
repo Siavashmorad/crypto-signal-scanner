@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models/market_data.dart';
+import 'services/account_balance.dart';
 import 'services/ai_analyst.dart';
 import 'services/local_trade_store.dart';
 import 'services/order_sizing.dart';
+import 'services/position_tracker.dart';
 import 'services/scanner_service.dart';
 import 'services/symbol_rules_service.dart';
 import 'services/tabdeal_api.dart';
@@ -228,7 +230,6 @@ class _HomePageState extends State<HomePage> {
   final sizing = OrderSizingEngine();
   final ai = AiAnalystService();
   final tradeStore = LocalTradeStore();
-  final history = <MarketSignal>[];
   final Map<String, Map<String, dynamic>> lastFills = {};
   bool loading = false;
   bool checkingLink = true;
@@ -388,22 +389,46 @@ class _HomePageState extends State<HomePage> {
 
     final configured = await tradeStore.defaultQty();
     final filters = await rules.filtersFor(signal.symbol);
+    final isLong = signal.side.toUpperCase() == 'LONG';
+    final side = isOpen
+        ? (isLong ? 'BUY' : 'SELL')
+        : (isLong ? 'SELL' : 'BUY');
+    final isBuy = side == 'BUY';
+
+    // Real balance from Tabdeal
+    final client = TabdealTradeClient(
+      apiKey: await tradeStore.apiKey(),
+      apiSecret: await tradeStore.apiSecret(),
+    );
+    final snap = await client.accountSnapshot();
+    final quote = AccountSnapshot.quoteAsset(signal.symbol);
+    final available = snap.available
+        ? (isBuy ? snap.freeQuote(signal.symbol) : snap.freeBase(signal.symbol))
+        : 0.0;
+
     final size = sizing.compute(
       filters: filters,
       configuredQty: configured,
       currentPrice: signal.entry,
-      // balance unknown without private call — skip unless user sets max risk via qty only
-      availableQuote: 0,
-      maxRiskQuote: 0,
+      availableQuote: isBuy ? available : (available * signal.entry),
+      riskPercent: 0.01,
+      entry: signal.entry,
+      stopLoss: signal.stopLoss,
+      isBuy: isBuy,
     );
 
     if (!size.canSubmit) {
+      client.dispose();
       if (!mounted) return;
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: Text(en ? 'Cannot place order' : 'امکان ارسال سفارش نیست'),
-          content: Text(size.message),
+          title: Text(en ? 'NO TRADE' : 'بدون معامله'),
+          content: Text(
+            '${size.message}\n\n'
+            '${en ? 'Balance' : 'موجودی'} $quote: '
+            '${snap.available ? available.toStringAsFixed(4) : (snap.error ?? 'Unavailable')}',
+          ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx),
@@ -414,24 +439,25 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    final isLong = signal.side.toUpperCase() == 'LONG';
-    final side = isOpen
-        ? (isLong ? 'BUY' : 'SELL')
-        : (isLong ? 'SELL' : 'BUY');
-
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(en ? 'Approve order' : 'تأیید سفارش'),
-        content: Text(
-          '${signal.symbol}  $side MARKET\n'
-          '${en ? 'Requested' : 'درخواستی'}: ${size.requestedQty}\n'
-          '${en ? 'Exchange min qty' : 'حداقل صرافی'}: ${size.minQty}\n'
-          '${en ? 'Min notional' : 'حداقل ارزش'}: ${size.minNotional}\n'
-          '${en ? 'Final qty' : 'حجم نهایی'}: ${size.finalQty}\n'
-          '${en ? 'Approx value' : 'ارزش تقریبی'}: ${size.approxNotional.toStringAsFixed(2)}\n'
-          '${size.message}\n\n'
-          '${en ? 'Spot only — SHORT means SELL asset, not leveraged short.' : 'فقط اسپات — SHORT یعنی فروش دارایی، نه شورت اهرمی.'}',
+        title: Text(en ? 'Approve SPOT order' : 'تأیید سفارش اسپات'),
+        content: SingleChildScrollView(
+          child: Text(
+            '${signal.symbol}\n'
+            '${en ? 'Action' : 'عملیات'}: SPOT $side\n'
+            '${en ? 'Available' : 'موجودی آزاد'} ($quote): ${available.toStringAsFixed(4)}\n'
+            '${en ? 'Risk %' : 'درصد ریسک'}: ${size.riskPercent.toStringAsFixed(1)}%\n'
+            '${en ? 'Risk amount' : 'مبلغ ریسک'}: ${size.riskAmount.toStringAsFixed(2)}\n'
+            '${en ? 'Stop distance' : 'فاصله حدضرر'}: ${size.stopDistance.toStringAsFixed(5)}\n'
+            '${en ? 'Requested qty' : 'حجم درخواستی'}: ${size.requestedQty}\n'
+            '${en ? 'Exchange min' : 'حداقل صرافی'}: ${size.minQty}\n'
+            '${en ? 'Final qty' : 'حجم نهایی'}: ${size.finalQty}\n'
+            '${en ? 'Order value' : 'ارزش سفارش'}: ${size.approxNotional.toStringAsFixed(2)}\n'
+            '${size.message}\n\n'
+            '${en ? 'Spot only — not leveraged futures short.' : 'فقط اسپات — شورت اهرمی نیست.'}',
+          ),
         ),
         actions: [
           TextButton(
@@ -443,27 +469,30 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok != true) {
+      client.dispose();
+      return;
+    }
 
     try {
-      final client = TabdealTradeClient(
-        apiKey: await tradeStore.apiKey(),
-        apiSecret: await tradeStore.apiSecret(),
-      );
       final res = await client.marketOrder(
         symbol: signal.symbol,
         side: side,
         quantity: size.finalQty,
       );
-      client.dispose();
+      final tracked = TrackedOrder.fromApi(res, fallbackSymbol: signal.symbol);
       lastFills[signal.symbol] = res;
+      client.dispose();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(
-          '${en ? 'Order' : 'سفارش'}: ${res['orderId'] ?? res['order_id'] ?? res['status'] ?? 'ok'}',
+          '${en ? 'SPOT' : 'اسپات'} ${tracked.rawStatus} '
+          'id=${tracked.orderId ?? '-'} '
+          'avg=${tracked.avgPrice > 0 ? tracked.avgPrice.toStringAsFixed(5) : '-'}',
         ),
       ));
     } catch (e) {
+      client.dispose();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(e.toString().replaceFirst('Bad state: ', '')),
@@ -679,7 +708,7 @@ class _SignalCard extends StatelessWidget {
                   Chip(
                     label: Text(executed
                         ? (en ? 'FILLED' : 'اجرا شده')
-                        : signal.side),
+                        : 'SPOT ${signal.side}'),
                   ),
                 ],
               ),
@@ -712,14 +741,14 @@ class _SignalCard extends StatelessWidget {
                   Expanded(
                     child: FilledButton(
                       onPressed: onOpen,
-                      child: Text(en ? 'OPEN' : 'باز'),
+                      child: Text(en ? 'SPOT OPEN' : 'باز اسپات'),
                     ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: OutlinedButton(
                       onPressed: onClose,
-                      child: Text(en ? 'CLOSE' : 'بستن'),
+                      child: Text(en ? 'SPOT CLOSE' : 'بستن اسپات'),
                     ),
                   ),
                 ],
