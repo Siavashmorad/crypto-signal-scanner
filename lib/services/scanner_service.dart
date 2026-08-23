@@ -1,11 +1,17 @@
 import 'dart:developer' as developer;
 
 import '../models/market_data.dart';
+import 'binance_public.dart';
 import 'tabdeal_api.dart';
 
 class ScannerService {
   final TabdealApi api;
-  const ScannerService(this.api);
+  final BinancePublic binance;
+  /// After last scan: 'tabdeal' | 'binance' | 'none'
+  String dataSource = 'none';
+
+  ScannerService(this.api, {BinancePublic? binance})
+      : binance = binance ?? BinancePublic();
 
   List<Candle> buildCandles(List<TradePoint> trades, Duration timeframe) {
     if (trades.isEmpty) return const [];
@@ -82,8 +88,37 @@ class ScannerService {
     return trs.skip(trs.length - period).reduce((a, b) => a + b) / period;
   }
 
+  Future<List<TradePoint>> _trades(String symbol) async {
+    try {
+      final t = await api.trades(symbol, limit: 200);
+      if (t.isNotEmpty) {
+        dataSource = 'tabdeal';
+        return t;
+      }
+    } catch (_) {}
+    try {
+      final t = await binance.trades(symbol, limit: 200);
+      dataSource = 'binance';
+      return t;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> _depth(String symbol) async {
+    try {
+      final d = await api.depth(symbol);
+      if ((d['bids'] as List?)?.isNotEmpty == true) return d;
+    } catch (_) {}
+    try {
+      return await binance.depth(symbol);
+    } catch (_) {
+      return {'bids': [], 'asks': []};
+    }
+  }
+
   Future<MarketSignal?> scanSymbol(String symbol, Duration timeframe) async {
-    final trades = await api.trades(symbol, limit: 200);
+    final trades = await _trades(symbol);
     if (trades.length < 40) return null;
     final candles = buildCandles(trades, timeframe);
     if (candles.length < 15) return null;
@@ -95,7 +130,7 @@ class ScannerService {
     final atr = _atr(candles, 14);
     if (atr <= 0 || last <= 0) return null;
 
-    final depth = await api.depth(symbol);
+    final depth = await _depth(symbol);
     double bid = 0;
     double ask = 0;
     for (final row in (depth['bids'] is List ? depth['bids'] : const [])) {
@@ -154,14 +189,19 @@ class ScannerService {
     return confidence + rrQuality - volatilityPenalty;
   }
 
-  /// Fast scan: priority USDT markets, high concurrency, early stop.
   Future<List<MarketSignal>> scanAll({
     Duration timeframe = const Duration(minutes: 15),
     int maxConcurrency = 10,
-    int maxSymbols = 30,
+    int maxSymbols = 24,
     int maxSignals = 12,
   }) async {
-    final symbols = await api.activeUsdtSymbols(maxSymbols: maxSymbols);
+    dataSource = 'none';
+    List<String> symbols;
+    try {
+      symbols = await api.activeUsdtSymbols(maxSymbols: maxSymbols);
+    } catch (_) {
+      symbols = TabdealApi.fallbackSymbols.take(maxSymbols).toList();
+    }
     final signals = <MarketSignal>[];
     for (var start = 0; start < symbols.length; start += maxConcurrency) {
       final batch = symbols.skip(start).take(maxConcurrency).toList();
@@ -169,12 +209,8 @@ class ScannerService {
         try {
           return await scanSymbol(s, timeframe);
         } catch (error, stackTrace) {
-          developer.log(
-            'Failed to scan market $s',
-            name: 'ScannerService',
-            error: error,
-            stackTrace: stackTrace,
-          );
+          developer.log('scan $s failed',
+              name: 'ScannerService', error: error, stackTrace: stackTrace);
           return null;
         }
       }));
