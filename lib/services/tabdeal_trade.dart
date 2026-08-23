@@ -3,7 +3,8 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
-/// Signed Tabdeal client on phone — signature matches official Python SDK.
+/// Signed Tabdeal client on phone — matches official Python SDK signing.
+/// Spot only: POST /api/v1/order (not FAPI leverage positions).
 class TabdealTradeClient {
   TabdealTradeClient({
     required this.apiKey,
@@ -21,7 +22,7 @@ class TabdealTradeClient {
 
   bool get configured => apiKey.trim().isNotEmpty && apiSecret.trim().isNotEmpty;
 
-  /// Official Python uses urllib urlencode order (insertion order), NOT sorted keys.
+  /// Insertion-order query string (same as tabdeal-python urlencode). Do NOT sort.
   String _sign(Map<String, String> params) {
     final query = params.entries.map((e) => '${e.key}=${e.value}').join('&');
     final digest =
@@ -29,18 +30,9 @@ class TabdealTradeClient {
     return digest.toString();
   }
 
+  /// Compact form preferred for orders: BTCIRT, ETHUSDT (no underscore).
   String _compact(String symbol) =>
       symbol.toUpperCase().replaceAll('_', '').replaceAll('-', '');
-
-  String _tabdealSymbol(String compact) {
-    final s = _compact(compact);
-    for (final q in ['USDT', 'IRT', 'TMN']) {
-      if (s.endsWith(q) && s.length > q.length) {
-        return '${s.substring(0, s.length - q.length)}_$q';
-      }
-    }
-    return s;
-  }
 
   Future<Map<String, dynamic>> _signed({
     required String method,
@@ -50,7 +42,6 @@ class TabdealTradeClient {
     Object? lastErr;
     for (final host in hosts) {
       try {
-        // Build params in stable insertion order (same as tabdeal-python).
         final params = <String, String>{};
         if (body != null) {
           for (final e in body.entries) {
@@ -59,15 +50,14 @@ class TabdealTradeClient {
         }
         params['timestamp'] = '${DateTime.now().millisecondsSinceEpoch}';
         params['recvWindow'] = '60000';
-        final signature = _sign(params);
-        params['signature'] = signature;
+        params['signature'] = _sign(params);
 
         final uri = Uri.parse('$host$path');
         final headers = {
           'X-MBX-APIKEY': apiKey.trim(),
           'Content-Type': 'application/x-www-form-urlencoded',
           'Accept': 'application/json',
-          'User-Agent': 'Mozilla/5.0 SignalYab-Phone/1.1',
+          'User-Agent': 'Mozilla/5.0 SignalYab-Phone/1.2',
         };
 
         late http.Response res;
@@ -103,7 +93,6 @@ class TabdealTradeClient {
               decoded['raw_body'] ??
               'HTTP ${res.statusCode}';
           lastErr = msg;
-          // try next host
           continue;
         }
         return decoded;
@@ -114,19 +103,18 @@ class TabdealTradeClient {
     throw StateError('اتصال/سفارش تبدیل ناموفق: $lastErr');
   }
 
-  /// Spot MARKET. Uses tabdealSymbol (BTC_IRT) preferred by API docs.
+  /// Spot MARKET order. Docs: send EITHER symbol OR tabdealSymbol — not both.
+  /// Official examples prefer compact symbol (e.g. BTCIRT).
   Future<Map<String, dynamic>> marketOrder({
     required String symbol,
     required String side,
     required double quantity,
   }) {
     final compact = _compact(symbol);
-    final td = _tabdealSymbol(compact);
     return _signed(
       method: 'POST',
       path: '/api/v1/order',
       body: {
-        'tabdealSymbol': td,
         'symbol': compact,
         'side': side.toUpperCase(),
         'type': 'MARKET',
@@ -141,7 +129,6 @@ class TabdealTradeClient {
   Future<Map<String, dynamic>> openOrders({String? symbol}) {
     final body = <String, String>{};
     if (symbol != null) {
-      body['tabdealSymbol'] = _tabdealSymbol(symbol);
       body['symbol'] = _compact(symbol);
     }
     return _signed(method: 'GET', path: '/r/api/v1/openOrders', body: body);
