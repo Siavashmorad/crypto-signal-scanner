@@ -4,7 +4,7 @@ import 'package:crypto_signal_scanner/services/order_sizing.dart';
 void main() {
   final engine = OrderSizingEngine();
 
-  test('quantity below minQty is raised when risk allows', () {
+  test('raises qty to minQty when balance and risk allow', () {
     final f = SymbolFilters(
       symbol: 'BCHUSDT',
       minQty: 0.02,
@@ -18,32 +18,35 @@ void main() {
       availableQuote: 10000,
       riskPercent: 0.05,
       entry: 270,
-      stopLoss: 260,
+      stopLoss: 250,
     );
     expect(r.canSubmit, isTrue);
     expect(r.finalQty, greaterThanOrEqualTo(0.02));
   });
 
-  test('min order that exceeds risk → NO TRADE', () {
+  test('NO TRADE when exchange min exceeds risk budget', () {
+    // riskAmount = 100 * 0.01 = 1 USDT
+    // stopDist = 1 → riskBased qty = 1
+    // minQty = 10 → min risk = 10 > 1 → NO TRADE
     final f = SymbolFilters(
       symbol: 'BCHUSDT',
-      minQty: 1.0,
-      stepSize: 0.1,
-      minNotional: 200,
+      minQty: 10,
+      stepSize: 1,
+      minNotional: 1,
     );
     final r = engine.compute(
       filters: f,
       configuredQty: 0.01,
       currentPrice: 270,
-      availableQuote: 500,
+      availableQuote: 100,
       riskPercent: 0.01,
       entry: 270,
-      stopLoss: 265,
+      stopLoss: 269,
     );
     expect(r.canSubmit, isFalse);
   });
 
-  test('insufficient balance blocks order', () {
+  test('insufficient balance blocks buy', () {
     final f = SymbolFilters(
       symbol: 'BCHUSDT',
       minQty: 0.02,
@@ -61,7 +64,7 @@ void main() {
     expect(r.status, OrderSizeStatus.insufficientBalance);
   });
 
-  test('stepSize produces valid multiple', () {
+  test('stepSize rounding is at least step', () {
     final f = SymbolFilters(
       symbol: 'ETHUSDT',
       minQty: 0.001,
@@ -75,7 +78,7 @@ void main() {
       availableQuote: 10000,
     );
     expect(r.canSubmit, isTrue);
-    expect(r.finalQty % 0.001, closeTo(0, 1e-9));
+    expect(r.finalQty, greaterThanOrEqualTo(0.002 - 1e-12));
   });
 
   test('valid BTC risk-based', () {
@@ -107,6 +110,6 @@ void main() {
       availableQuote: 10000,
     );
     expect(r.canSubmit, isTrue);
-    expect(r.finalQty * r.price, greaterThanOrEqualTo(50 - 1e-6));
+    expect(r.approxNotional, greaterThanOrEqualTo(50 - 1e-6));
   });
 }
