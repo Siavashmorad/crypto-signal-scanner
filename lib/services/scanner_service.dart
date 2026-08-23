@@ -83,10 +83,10 @@ class ScannerService {
   }
 
   Future<MarketSignal?> scanSymbol(String symbol, Duration timeframe) async {
-    final trades = await api.trades(symbol);
-    if (trades.length < 80) return null;
+    final trades = await api.trades(symbol, limit: 200);
+    if (trades.length < 40) return null;
     final candles = buildCandles(trades, timeframe);
-    if (candles.length < 20) return null;
+    if (candles.length < 15) return null;
     final closes = candles.map((e) => e.close).toList();
     final last = closes.last;
     final ema9 = _ema(closes, 9);
@@ -109,8 +109,8 @@ class ScannerService {
       }
     }
     final imbalance = bid + ask == 0 ? 0 : (bid - ask) / (bid + ask);
-    final long = ema9 > ema21 && rsi >= 50 && rsi <= 72 && imbalance >= -0.10;
-    final short = ema9 < ema21 && rsi <= 50 && rsi >= 28 && imbalance <= 0.10;
+    final long = ema9 > ema21 && rsi >= 48 && rsi <= 72 && imbalance >= -0.12;
+    final short = ema9 < ema21 && rsi <= 52 && rsi >= 28 && imbalance <= 0.12;
     if (!long && !short) return null;
 
     var score = 50.0;
@@ -118,7 +118,7 @@ class ScannerService {
     score += (rsi - 50).abs() * 0.35;
     score += imbalance.abs() * 15;
     score = score.clamp(0, 100);
-    if (score < 62) return null;
+    if (score < 58) return null;
 
     final side = long ? 'LONG' : 'SHORT';
     final stopDistance = atr * 1.5;
@@ -127,7 +127,8 @@ class ScannerService {
     final tp1 = long ? last + reward * 0.5 : last - reward * 0.5;
     final tp2 = long ? last + reward : last - reward;
     final tp3 = long ? last + reward * 1.5 : last - reward * 1.5;
-    final timeframeLabel = '${timeframe.inMinutes}m';
+    final timeframeLabel =
+        timeframe.inMinutes >= 60 ? '1h' : '${timeframe.inMinutes}m';
     return MarketSignal(
       symbol: symbol,
       side: side,
@@ -153,11 +154,14 @@ class ScannerService {
     return confidence + rrQuality - volatilityPenalty;
   }
 
+  /// Fast scan: priority USDT markets, high concurrency, early stop.
   Future<List<MarketSignal>> scanAll({
     Duration timeframe = const Duration(minutes: 15),
-    int maxConcurrency = 4,
+    int maxConcurrency = 10,
+    int maxSymbols = 30,
+    int maxSignals = 12,
   }) async {
-    final symbols = await api.activeUsdtSymbols();
+    final symbols = await api.activeUsdtSymbols(maxSymbols: maxSymbols);
     final signals = <MarketSignal>[];
     for (var start = 0; start < symbols.length; start += maxConcurrency) {
       final batch = symbols.skip(start).take(maxConcurrency).toList();
@@ -175,12 +179,13 @@ class ScannerService {
         }
       }));
       signals.addAll(results.whereType<MarketSignal>());
+      if (signals.length >= maxSignals) break;
     }
     signals.sort((a, b) {
       final rank = _rankScore(b).compareTo(_rankScore(a));
       if (rank != 0) return rank;
       return b.confidence.compareTo(a.confidence);
     });
-    return signals;
+    return signals.take(maxSignals).toList();
   }
 }
