@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models/market_data.dart';
 import 'services/ai_analyst.dart';
-import 'services/execution_service.dart';
+import 'services/local_trade_store.dart';
 import 'services/scanner_service.dart';
 import 'services/tabdeal_api.dart';
-import 'widgets/execution_panel.dart';
+import 'services/tabdeal_trade.dart';
+import 'widgets/trade_settings_page.dart';
 
 const ownerUsername = 'Siavashmorad';
 
@@ -152,8 +153,8 @@ class _LoginPageState extends State<LoginPage> {
                       const SizedBox(height: 8),
                       Text(
                         widget.english
-                            ? 'Live Tabdeal scanner + on-device analyst'
-                            : 'اتصال زنده به تبدیل + تحلیلگر روی گوشی',
+                            ? 'Scan + trade from your phone (no server)'
+                            : 'اسکن و معامله از گوشی — بدون سرور',
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 24),
@@ -224,11 +225,13 @@ class _HomePageState extends State<HomePage> {
   final api = TabdealApi();
   late final scanner = ScannerService(api);
   final ai = AiAnalystService();
-  final execution = ExecutionService();
+  final tradeStore = LocalTradeStore();
   final history = <MarketSignal>[];
   bool loading = false;
   bool checkingLink = true;
   bool tabdealLinked = false;
+  bool tradeReady = false;
+  bool liveOn = false;
   String timeframe = '15m';
   String? status;
   List<MarketSignal> signals = [];
@@ -237,7 +240,6 @@ class _HomePageState extends State<HomePage> {
   AiAnalysis? aiAnalysis;
   bool aiLoading = false;
   String? aiError;
-  int pendingRefreshToken = 0;
 
   Duration get duration => switch (timeframe) {
         '1m' => const Duration(minutes: 1),
@@ -250,6 +252,17 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _checkTabdeal();
+    _refreshTradeStatus();
+  }
+
+  Future<void> _refreshTradeStatus() async {
+    final has = await tradeStore.hasKeys();
+    final live = await tradeStore.liveEnabled();
+    if (!mounted) return;
+    setState(() {
+      tradeReady = has;
+      liveOn = live && has;
+    });
   }
 
   Future<void> _checkTabdeal() async {
@@ -264,7 +277,7 @@ class _HomePageState extends State<HomePage> {
               ? 'Connected to Tabdeal (${api.activeHost})'
               : 'متصل به تبدیل (${api.activeHost})')
           : (widget.english
-              ? 'Cannot reach Tabdeal. Check mobile data/Wi-Fi.'
+              ? 'Cannot reach Tabdeal. Check internet.'
               : 'اتصال به تبدیل برقرار نشد. اینترنت را چک کنید.');
     });
   }
@@ -274,8 +287,8 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       loading = true;
       status = widget.english
-          ? 'Scanning top USDT markets on Tabdeal...'
-          : 'در حال اسکن سریع بازارهای مهم USDT روی تبدیل...';
+          ? 'Scanning top USDT markets...'
+          : 'در حال اسکن بازارهای USDT...';
     });
     final started = DateTime.now();
     try {
@@ -294,11 +307,11 @@ class _HomePageState extends State<HomePage> {
         tabdealLinked = true;
         status = result.isEmpty
             ? (widget.english
-                ? 'Connected. No setup matched filters (${secs}s).'
-                : 'متصل شد. در $secs ثانیه سیگنال تأییدشده‌ای پیدا نشد.')
+                ? 'No setup (${secs}s)'
+                : 'سیگنال تأییدشده نبود ($secsث)')
             : (widget.english
-                ? '${result.length} setups in ${secs}s via ${api.activeHost}'
-                : '${result.length} فرصت در ${secs}ث از ${api.activeHost}');
+                ? '${result.length} setups in ${secs}s'
+                : '${result.length} فرصت در $secsث');
         for (final item in result.take(20)) {
           if (!history.any((h) =>
               h.symbol == item.symbol &&
@@ -345,68 +358,90 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<void> proposeOpen(MarketSignal signal) async {
+  /// Phone → Tabdeal. Approve dialog first. No server.
+  Future<void> placeOnPhone(MarketSignal signal, {required bool isOpen}) async {
     final en = widget.english;
-    if (!execution.configured) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(en
-            ? 'Trading backend not in this APK (scan+analyst work).'
-            : 'بک‌اند معامله در این APK نیست؛ اسکن و تحلیل کار می‌کند.'),
-      ));
+    final has = await tradeStore.hasKeys();
+    final live = await tradeStore.liveEnabled();
+    if (!has || !live) {
+      if (!mounted) return;
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(en ? 'Trading not ready' : 'معامله آماده نیست'),
+          content: Text(en
+              ? 'Save Tabdeal API key and enable LIVE in settings.'
+              : 'در تنظیمات، کلید API تبدیل را ذخیره و سفارش واقعی را روشن کنید.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(en ? 'Later' : 'بعداً')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text(en ? 'Settings' : 'تنظیمات')),
+          ],
+        ),
+      );
+      if (go == true && mounted) {
+        await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => TradeSettingsPage(english: en),
+        ));
+        await _refreshTradeStatus();
+      }
       return;
     }
-    if (widget.aiUsername == null || widget.aiPassword == null) return;
+
+    final qty = await tradeStore.defaultQty();
+    final isLong = signal.side.toUpperCase() == 'LONG';
+    // Spot: open long = BUY, close long = SELL; open short = SELL (needs inventory/margin)
+    final side = isOpen
+        ? (isLong ? 'BUY' : 'SELL')
+        : (isLong ? 'SELL' : 'BUY');
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(en ? 'Request OPEN' : 'درخواست باز کردن'),
-        content: Text('${signal.symbol} ${signal.side}'),
+        title: Text(en
+            ? (isOpen ? 'Approve OPEN (real money)' : 'Approve CLOSE (real money)')
+            : (isOpen ? 'تأیید باز کردن (پول واقعی)' : 'تأیید بستن (پول واقعی)')),
+        content: Text(en
+            ? '${signal.symbol}\n$side MARKET qty $qty\nEntry ~ ${signal.entry}\nThis sends a real order to Tabdeal from your phone.'
+            : '${signal.symbol}\n$side مارکت حجم $qty\nورود تقریبی ${signal.entry}\nسفارش واقعی از همین گوشی به تبدیل ارسال می‌شود.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
               child: Text(en ? 'Cancel' : 'انصراف')),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: Text(en ? 'Propose' : 'ثبت')),
+              child: Text(en ? 'Approve & send' : 'تأیید و ارسال')),
         ],
       ),
     );
     if (ok != true) return;
-    try {
-      await execution.proposeOpen(
-        username: widget.aiUsername!,
-        password: widget.aiPassword!,
-        symbol: signal.symbol,
-        side: signal.side,
-        quantity: 0.001,
-        entry: signal.entry,
-        stopLoss: signal.stopLoss,
-        takeProfit: signal.tp1,
-      );
-      if (mounted) setState(() => pendingRefreshToken++);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString().replaceFirst('Bad state: ', ''))),
-        );
-      }
-    }
-  }
 
-  Future<void> proposeClose(MarketSignal signal) async {
-    if (!execution.configured ||
-        widget.aiUsername == null ||
-        widget.aiPassword == null) {
-      return;
-    }
     try {
-      await execution.proposeClose(
-        username: widget.aiUsername!,
-        password: widget.aiPassword!,
-        symbol: signal.symbol,
+      final client = TabdealTradeClient(
+        apiKey: await tradeStore.apiKey(),
+        apiSecret: await tradeStore.apiSecret(),
       );
-      if (mounted) setState(() => pendingRefreshToken++);
-    } catch (_) {}
+      final res = await client.marketOrder(
+        symbol: signal.symbol,
+        side: side,
+        quantity: qty,
+      );
+      client.dispose();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(en
+            ? 'Order sent: ${res['orderId'] ?? res['order_id'] ?? 'ok'}'
+            : 'سفارش ارسال شد: ${res['orderId'] ?? res['order_id'] ?? 'موفق'}'),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('Bad state: ', '')),
+      ));
+    }
   }
 
   String money(double value) {
@@ -418,7 +453,6 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     ai.dispose();
-    execution.dispose();
     super.dispose();
   }
 
@@ -431,6 +465,16 @@ class _HomePageState extends State<HomePage> {
         appBar: AppBar(
           title: Text(en ? 'SignalYab' : 'سیگنال‌یاب'),
           actions: [
+            IconButton(
+              tooltip: en ? 'Trading settings' : 'تنظیمات معامله',
+              onPressed: () async {
+                await Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => TradeSettingsPage(english: en),
+                ));
+                await _refreshTradeStatus();
+              },
+              icon: const Icon(Icons.account_balance_wallet_outlined),
+            ),
             IconButton(
               onPressed: checkingLink ? null : _checkTabdeal,
               icon: Icon(
@@ -475,11 +519,39 @@ class _HomePageState extends State<HomePage> {
                           color: tabdealLinked ? Colors.green : Colors.orange,
                         ),
                   title: Text(checkingLink
-                      ? (en ? 'Checking Tabdeal...' : 'در حال اتصال به تبدیل...')
+                      ? (en ? 'Checking...' : 'در حال اتصال...')
                       : (tabdealLinked
-                          ? (en ? 'Live on Tabdeal' : 'متصل به تبدیل (زنده)')
-                          : (en ? 'Offline from Tabdeal' : 'قطع از تبدیل'))),
+                          ? (en ? 'Live market data' : 'داده بازار زنده')
+                          : (en ? 'Offline' : 'قطع'))),
                   subtitle: Text(status ?? ''),
+                ),
+              ),
+              Card(
+                color: liveOn
+                    ? Colors.green.withOpacity(0.1)
+                    : Colors.blueGrey.withOpacity(0.08),
+                child: ListTile(
+                  leading: Icon(
+                    liveOn ? Icons.bolt : Icons.bolt_outlined,
+                    color: liveOn ? Colors.green : null,
+                  ),
+                  title: Text(liveOn
+                      ? (en
+                          ? 'LIVE trading ready on this phone'
+                          : 'معامله واقعی از این گوشی آماده است')
+                      : (en
+                          ? 'Trading off — open wallet settings'
+                          : 'معامله خاموش — تنظیمات کیف پول')),
+                  subtitle: Text(en
+                      ? 'No server. Keys stay on phone. Approve every order.'
+                      : 'بدون سرور. کلید روی گوشی. هر سفارش با تأیید شما.'),
+                  trailing: const Icon(Icons.chevron_left),
+                  onTap: () async {
+                    await Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => TradeSettingsPage(english: en),
+                    ));
+                    await _refreshTradeStatus();
+                  },
                 ),
               ),
               Card(
@@ -495,10 +567,6 @@ class _HomePageState extends State<HomePage> {
                             .titleLarge
                             ?.copyWith(fontWeight: FontWeight.bold),
                       ),
-                      const SizedBox(height: 8),
-                      Text(en
-                          ? 'Top ~30 liquid markets from Tabdeal.'
-                          : 'حدود ۳۰ بازار نقدشونده از تبدیل.'),
                       const SizedBox(height: 16),
                       Row(
                         children: [
@@ -523,9 +591,8 @@ class _HomePageState extends State<HomePage> {
                             child: FilledButton.icon(
                               onPressed: loading ? null : scan,
                               icon: const Icon(Icons.radar),
-                              label: Text(loading
-                                  ? '...'
-                                  : (en ? 'Scan' : 'اسکن')),
+                              label: Text(
+                                  loading ? '...' : (en ? 'Scan' : 'اسکن')),
                             ),
                           ),
                         ],
@@ -533,13 +600,6 @@ class _HomePageState extends State<HomePage> {
                     ],
                   ),
                 ),
-              ),
-              ExecutionPanel(
-                key: ValueKey(pendingRefreshToken),
-                english: en,
-                username: widget.aiUsername,
-                password: widget.aiPassword,
-                execution: execution,
               ),
               if (signals.isNotEmpty) ...[
                 Padding(
@@ -560,8 +620,8 @@ class _HomePageState extends State<HomePage> {
                         en: en,
                         money: money,
                         onAi: () => analyzeWithAi(signal),
-                        onProposeOpen: () => proposeOpen(signal),
-                        onProposeClose: () => proposeClose(signal),
+                        onOpen: () => placeOnPhone(signal, isOpen: true),
+                        onClose: () => placeOnPhone(signal, isOpen: false),
                       ),
                     ),
               ],
@@ -573,6 +633,17 @@ class _HomePageState extends State<HomePage> {
                   loading: aiLoading,
                   error: aiError,
                 ),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.warning_amber),
+                  title: Text(en
+                      ? 'Profit is never guaranteed'
+                      : 'سود تضمینی وجود ندارد'),
+                  subtitle: Text(en
+                      ? 'Start with tiny size. Crypto is high risk.'
+                      : 'با حجم خیلی کم شروع کنید. کریپتو پرریسک است.'),
+                ),
+              ),
             ],
           ),
         ),
@@ -586,16 +657,16 @@ class _SignalCard extends StatelessWidget {
   final bool en;
   final String Function(double) money;
   final VoidCallback? onAi;
-  final VoidCallback? onProposeOpen;
-  final VoidCallback? onProposeClose;
+  final VoidCallback? onOpen;
+  final VoidCallback? onClose;
 
   const _SignalCard({
     required this.signal,
     required this.en,
     required this.money,
     required this.onAi,
-    required this.onProposeOpen,
-    required this.onProposeClose,
+    required this.onOpen,
+    required this.onClose,
   });
 
   @override
@@ -625,23 +696,21 @@ class _SignalCard extends StatelessWidget {
               _row(en ? 'Stop Loss' : 'حد ضرر', money(signal.stopLoss)),
               _row('TP1', money(signal.tp1)),
               _row('TP2', money(signal.tp2)),
-              _row(en ? 'Risk / Reward' : 'ریسک / سود',
-                  '1 : ${signal.riskReward.toStringAsFixed(1)}'),
               const SizedBox(height: 10),
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.tonalIcon(
                   onPressed: onAi,
                   icon: const Icon(Icons.psychology),
-                  label: Text(en ? 'Analyst' : 'تحلیلگر هوشمند'),
+                  label: Text(en ? 'Analyst' : 'تحلیلگر'),
                 ),
               ),
               const SizedBox(height: 8),
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: onProposeOpen,
+                    child: FilledButton.icon(
+                      onPressed: onOpen,
                       icon: const Icon(Icons.lock_open),
                       label: Text(en ? 'OPEN' : 'باز'),
                     ),
@@ -649,7 +718,7 @@ class _SignalCard extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: onProposeClose,
+                      onPressed: onClose,
                       icon: const Icon(Icons.lock),
                       label: Text(en ? 'CLOSE' : 'بستن'),
                     ),
@@ -713,39 +782,22 @@ class _AiAnalysisCard extends StatelessWidget {
     }
     final result = analysis;
     if (result == null) return const SizedBox.shrink();
-    final src = result.source == 'remote'
-        ? (en ? 'Cloud AI' : 'هوش ابری')
-        : (en ? 'On-device analyst' : 'تحلیلگر روی گوشی');
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(en ? 'Analyst' : 'تحلیلگر',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                Chip(label: Text(src)),
-              ],
-            ),
+            Text(en ? 'Analyst' : 'تحلیلگر',
+                style: const TextStyle(fontWeight: FontWeight.bold)),
             if (signal != null) Text('${signal!.symbol} • ${signal!.side}'),
             const SizedBox(height: 8),
             Text(result.summary),
             const Divider(),
             Text('${en ? 'Recommendation' : 'پیشنهاد'}: ${result.recommendation}'),
             Text('${en ? 'Trend' : 'روند'}: ${result.trend}'),
-            Text('${en ? 'Momentum' : 'مومنتوم'}: ${result.momentum}'),
             Text('${en ? 'Risk' : 'ریسک'}: ${result.riskLevel}'),
-            Text('${en ? 'Quality' : 'کیفیت'}: ${result.signalQuality}'),
             Text('${en ? 'Confidence' : 'اطمینان'}: ${result.confidence}%'),
-            if (result.reasons.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(en ? 'Reasons' : 'دلایل',
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-              ...result.reasons.map((r) => Text('• $r')),
-            ],
           ],
         ),
       ),
