@@ -143,7 +143,7 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                       const SizedBox(height: 18),
                       Text(
-                        'SignalYab',
+                        'سیگنال‌یاب',
                         style: Theme.of(context)
                             .textTheme
                             .headlineSmall
@@ -152,8 +152,8 @@ class _LoginPageState extends State<LoginPage> {
                       const SizedBox(height: 8),
                       Text(
                         widget.english
-                            ? 'Private scanner with approval-gated execution'
-                            : 'اسکنر خصوصی با اجرای معامله فقط بعد از تأیید شما',
+                            ? 'Live Tabdeal scanner + on-device analyst'
+                            : 'اتصال زنده به تبدیل + تحلیلگر روی گوشی',
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 24),
@@ -190,6 +190,13 @@ class _LoginPageState extends State<LoginPage> {
                           label: Text(widget.english ? 'Sign in' : 'ورود'),
                         ),
                       ),
+                      const SizedBox(height: 10),
+                      Text(
+                        widget.english
+                            ? 'Password must be at least 6 characters.'
+                            : 'رمز عبور حداقل ۶ کاراکتر',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                     ],
                   ),
                 ),
@@ -219,12 +226,14 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final scanner = ScannerService(TabdealApi());
+  final api = TabdealApi();
+  late final scanner = ScannerService(api);
   final ai = AiAnalystService();
   final execution = ExecutionService();
   final history = <MarketSignal>[];
-  final GlobalKey<State<ExecutionPanel>> executionKey = GlobalKey();
   bool loading = false;
+  bool checkingLink = true;
+  bool tabdealLinked = false;
   String timeframe = '15m';
   String? status;
   List<MarketSignal> signals = [];
@@ -233,6 +242,7 @@ class _HomePageState extends State<HomePage> {
   AiAnalysis? aiAnalysis;
   bool aiLoading = false;
   String? aiError;
+  int pendingRefreshToken = 0;
 
   Duration get duration => switch (timeframe) {
         '1m' => const Duration(minutes: 1),
@@ -241,27 +251,61 @@ class _HomePageState extends State<HomePage> {
         _ => const Duration(minutes: 15),
       };
 
+  @override
+  void initState() {
+    super.initState();
+    _checkTabdeal();
+  }
+
+  Future<void> _checkTabdeal() async {
+    setState(() => checkingLink = true);
+    final ok = await api.ping();
+    if (!mounted) return;
+    setState(() {
+      tabdealLinked = ok;
+      checkingLink = false;
+      if (ok) {
+        status = widget.english
+            ? 'Connected to Tabdeal (${api.activeHost})'
+            : 'متصل به تبدیل (${api.activeHost})';
+      } else {
+        status = widget.english
+            ? 'Cannot reach Tabdeal. Check mobile data/Wi‑Fi.'
+            : 'اتصال به تبدیل برقرار نشد. اینترنت موبایل را چک کنید.';
+      }
+    });
+  }
+
   Future<void> scan() async {
     if (loading) return;
     setState(() {
       loading = true;
-      status = null;
+      status = widget.english
+          ? 'Scanning top USDT markets on Tabdeal...'
+          : 'در حال اسکن سریع بازارهای مهم USDT روی تبدیل...';
     });
+    final started = DateTime.now();
     try {
-      final result =
-          await scanner.scanAll(timeframe: duration, maxConcurrency: 4);
+      final result = await scanner.scanAll(
+        timeframe: duration,
+        maxConcurrency: 10,
+        maxSymbols: 30,
+        maxSignals: 12,
+      );
+      final secs = DateTime.now().difference(started).inSeconds;
       if (!mounted) return;
       setState(() {
         signals = result;
         marketCount = result.map((e) => e.symbol).toSet().length;
         loading = false;
+        tabdealLinked = true;
         status = result.isEmpty
             ? (widget.english
-                ? 'No confirmed setup found.'
-                : 'سیگنال تأییدشده‌ای پیدا نشد.')
+                ? 'Connected. No setup matched filters (${secs}s).'
+                : 'متصل شد. در ${secs} ثانیه سیگنال تأییدشده‌ای پیدا نشد.')
             : (widget.english
-                ? '${result.length} confirmed opportunities found.'
-                : '${result.length} فرصت تأییدشده پیدا شد.');
+                ? '${result.length} setups in ${secs}s via ${api.activeHost}'
+                : '${result.length} فرصت در ${secs}ث از ${api.activeHost}');
         for (final item in result.take(20)) {
           if (!history.any((h) =>
               h.symbol == item.symbol &&
@@ -274,9 +318,8 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) return;
       setState(() {
         loading = false;
-        status = widget.english
-            ? 'Market data unavailable. Check internet and retry.'
-            : 'داده بازار در دسترس نیست؛ اینترنت را بررسی و دوباره تلاش کنید.';
+        tabdealLinked = false;
+        status = e.toString().replaceFirst('TabdealApiException: ', '');
       });
     }
   }
@@ -290,15 +333,10 @@ class _HomePageState extends State<HomePage> {
       aiLoading = true;
     });
     try {
-      if (widget.aiUsername == null || widget.aiPassword == null) {
-        throw StateError(widget.english
-            ? 'Please sign in again.'
-            : 'دوباره وارد شوید.');
-      }
       final result = await ai.analyze(
         signal: signal,
-        username: widget.aiUsername!,
-        password: widget.aiPassword!,
+        username: widget.aiUsername ?? ownerUsername,
+        password: widget.aiPassword ?? 'local',
       );
       if (!mounted) return;
       setState(() {
@@ -316,44 +354,37 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> proposeOpen(MarketSignal signal) async {
     final en = widget.english;
-    if (widget.aiUsername == null || widget.aiPassword == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(en ? 'Sign in again' : 'دوباره وارد شوید')),
-      );
-      return;
-    }
     if (!execution.configured) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(en
-              ? 'Backend URL not set in this APK'
-              : 'آدرس بک‌اند در این APK تنظیم نشده'),
+              ? 'Trading backend not in this APK (scan+AI work offline).'
+              : 'بک‌اند معامله در این APK نیست؛ اسکن و تحلیل کار می‌کند.'),
         ),
       );
       return;
     }
-    // Default small qty — user can refine later; risk sizing can be improved
     final qty = 0.001;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(en ? 'Request OPEN' : 'درخواست باز کردن'),
-        content: Text(
-          en
-              ? 'Create a pending OPEN for ${signal.symbol} (${signal.side})?\nNothing is sent until you Approve in the panel below.'
-              : 'درخواست OPEN برای ${signal.symbol} (${signal.side})؟\nتا تأیید شما در پنل پایین هیچ سفارشی ارسال نمی‌شود.',
-        ),
+        content: Text(en
+            ? 'Pending OPEN for ${signal.symbol}. Approve below to execute.'
+            : 'درخواست OPEN برای ${signal.symbol}. برای اجرا پایین تأیید کنید.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
               child: Text(en ? 'Cancel' : 'انصراف')),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: Text(en ? 'Propose' : 'ثبت درخواست')),
+              child: Text(en ? 'Propose' : 'ثبت')),
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok != true || widget.aiUsername == null || widget.aiPassword == null) {
+      return;
+    }
     try {
       await execution.proposeOpen(
         username: widget.aiUsername!,
@@ -366,14 +397,12 @@ class _HomePageState extends State<HomePage> {
         takeProfit: signal.tp1,
       );
       if (mounted) {
+        setState(() => pendingRefreshToken++);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(en
-                ? 'Pending OPEN created — approve below'
-                : 'درخواست OPEN ثبت شد — پایین تأیید کنید'),
-          ),
+              content: Text(
+                  en ? 'Pending OPEN — approve below' : 'ثبت شد — پایین تأیید کنید')),
         );
-        setState(() {});
       }
     } catch (e) {
       if (mounted) {
@@ -385,45 +414,18 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> proposeClose(MarketSignal signal) async {
-    final en = widget.english;
-    if (widget.aiUsername == null || widget.aiPassword == null) return;
-    if (!execution.configured) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(en ? 'Request CLOSE' : 'درخواست بستن'),
-        content: Text(
-          en
-              ? 'Create a pending CLOSE for ${signal.symbol}?\nNothing is sent until you Approve.'
-              : 'درخواست CLOSE برای ${signal.symbol}؟\nتا تأیید شما سفارشی ارسال نمی‌شود.',
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(en ? 'Cancel' : 'انصراف')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text(en ? 'Propose' : 'ثبت درخواست')),
-        ],
-      ),
-    );
-    if (ok != true) return;
+    if (!execution.configured ||
+        widget.aiUsername == null ||
+        widget.aiPassword == null) {
+      return;
+    }
     try {
       await execution.proposeClose(
         username: widget.aiUsername!,
         password: widget.aiPassword!,
         symbol: signal.symbol,
       );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(en
-                ? 'Pending CLOSE created — approve below'
-                : 'درخواست CLOSE ثبت شد — پایین تأیید کنید'),
-          ),
-        );
-        setState(() {});
-      }
+      if (mounted) setState(() => pendingRefreshToken++);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -456,6 +458,16 @@ class _HomePageState extends State<HomePage> {
           title: Text(en ? 'SignalYab' : 'سیگنال‌یاب'),
           actions: [
             IconButton(
+              tooltip: en ? 'Recheck Tabdeal' : 'تست اتصال تبدیل',
+              onPressed: checkingLink ? null : _checkTabdeal,
+              icon: Icon(
+                tabdealLinked ? Icons.cloud_done : Icons.cloud_off,
+                color: checkingLink
+                    ? null
+                    : (tabdealLinked ? Colors.green : Colors.red),
+              ),
+            ),
+            IconButton(
               onPressed: widget.onTheme,
               icon: Icon(widget.dark ? Icons.light_mode : Icons.dark_mode),
             ),
@@ -475,18 +487,45 @@ class _HomePageState extends State<HomePage> {
             padding: const EdgeInsets.all(16),
             children: [
               Card(
+                color: tabdealLinked
+                    ? Colors.green.withValues(alpha: 0.08)
+                    : Colors.orange.withValues(alpha: 0.08),
+                child: ListTile(
+                  leading: checkingLink
+                      ? const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(
+                          tabdealLinked ? Icons.link : Icons.link_off,
+                          color: tabdealLinked ? Colors.green : Colors.orange,
+                        ),
+                  title: Text(checkingLink
+                      ? (en ? 'Checking Tabdeal...' : 'در حال اتصال به تبدیل...')
+                      : (tabdealLinked
+                          ? (en ? 'Live on Tabdeal' : 'متصل به تبدیل (زنده)')
+                          : (en ? 'Offline from Tabdeal' : 'قطع از تبدیل'))),
+                  subtitle: Text(status ?? ''),
+                ),
+              ),
+              Card(
                 child: Padding(
                   padding: const EdgeInsets.all(18),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        en ? 'USDT market scanner' : 'اسکن بازارهای USDT',
+                        en ? 'Fast USDT scanner' : 'اسکن سریع USDT',
                         style: Theme.of(context)
                             .textTheme
                             .titleLarge
                             ?.copyWith(fontWeight: FontWeight.bold),
                       ),
+                      const SizedBox(height: 6),
+                      Text(en
+                          ? 'Top ~30 liquid markets, parallel fetch from Tabdeal.'
+                          : 'حدود ۳۰ بازار نقدشونده، دریافت موازی از تبدیل.'),
                       const SizedBox(height: 16),
                       Row(
                         children: [
@@ -502,18 +541,18 @@ class _HomePageState extends State<HomePage> {
                                   .toList(),
                               onChanged: loading
                                   ? null
-                                  : (v) =>
-                                      setState(() => timeframe = v ?? timeframe),
+                                  : (v) => setState(
+                                      () => timeframe = v ?? timeframe),
                             ),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
-                            child: OutlinedButton.icon(
+                            child: FilledButton.icon(
                               onPressed: loading ? null : scan,
                               icon: const Icon(Icons.radar),
                               label: Text(loading
-                                  ? (en ? 'Scanning...' : 'اسکن...')
-                                  : (en ? 'Scan USDT' : 'اسکن USDT')),
+                                  ? (en ? '...' : '...')
+                                  : (en ? 'Scan' : 'اسکن')),
                             ),
                           ),
                         ],
@@ -529,20 +568,13 @@ class _HomePageState extends State<HomePage> {
                 password: widget.aiPassword,
                 execution: execution,
               ),
-              if (status != null)
-                Card(
-                  child: ListTile(
-                    leading: Icon(signals.isEmpty
-                        ? Icons.info_outline
-                        : Icons.check_circle_outline),
-                    title: Text(status!),
-                  ),
-                ),
               if (signals.isNotEmpty) ...[
                 Padding(
                   padding: const EdgeInsets.only(top: 10, bottom: 4),
                   child: Text(
-                    en ? 'Best opportunities' : 'بهترین فرصت‌ها',
+                    en
+                        ? 'Best opportunities ($marketCount)'
+                        : 'بهترین فرصت‌ها ($marketCount)',
                     style: Theme.of(context)
                         .textTheme
                         .titleLarge
@@ -554,7 +586,7 @@ class _HomePageState extends State<HomePage> {
                         signal: signal,
                         en: en,
                         money: money,
-                        onAi: ai.configured ? () => analyzeWithAi(signal) : null,
+                        onAi: () => analyzeWithAi(signal),
                         onProposeOpen: () => proposeOpen(signal),
                         onProposeClose: () => proposeClose(signal),
                       ),
@@ -568,26 +600,12 @@ class _HomePageState extends State<HomePage> {
                   loading: aiLoading,
                   error: aiError,
                 ),
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.shield_outlined),
-                  title: Text(en
-                      ? 'Nothing trades without your Approve'
-                      : 'بدون تأیید شما هیچ معامله‌ای اجرا نمی‌شود'),
-                  subtitle: Text(en
-                      ? 'Propose → Approve/Reject. Modes: signal_only / paper / live_with_approval'
-                      : 'درخواست → تأیید/رد. حالت‌ها: signal_only / paper / live_with_approval'),
-                ),
-              ),
             ],
           ),
         ),
       ),
     );
   }
-
-  // bump key when proposes succeed so panel reloads
-  int pendingRefreshToken = 0;
 }
 
 class _SignalCard extends StatelessWidget {
@@ -635,23 +653,22 @@ class _SignalCard extends StatelessWidget {
               _row(en ? 'Risk / Reward' : 'ریسک / سود',
                   '1 : ${signal.riskReward.toStringAsFixed(1)}'),
               const SizedBox(height: 10),
-              if (onAi != null)
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: onAi,
-                    icon: const Icon(Icons.psychology_outlined),
-                    label: Text(en ? 'AI analysis' : 'تحلیل AI'),
-                  ),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.tonalIcon(
+                  onPressed: onAi,
+                  icon: const Icon(Icons.psychology),
+                  label: Text(en ? 'Analyst' : 'تحلیلگر هوشمند'),
                 ),
+              ),
               const SizedBox(height: 8),
               Row(
                 children: [
                   Expanded(
-                    child: FilledButton.tonalIcon(
+                    child: OutlinedButton.icon(
                       onPressed: onProposeOpen,
                       icon: const Icon(Icons.lock_open),
-                      label: Text(en ? 'Request OPEN' : 'درخواست باز'),
+                      label: Text(en ? 'OPEN' : 'باز'),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -659,7 +676,7 @@ class _SignalCard extends StatelessWidget {
                     child: OutlinedButton.icon(
                       onPressed: onProposeClose,
                       icon: const Icon(Icons.lock),
-                      label: Text(en ? 'Request CLOSE' : 'درخواست بستن'),
+                      label: Text(en ? 'CLOSE' : 'بستن'),
                     ),
                   ),
                 ],
@@ -699,14 +716,14 @@ class _AiAnalysisCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (loading) {
-      return const Card(
+      return Card(
         child: ListTile(
-          leading: SizedBox(
+          leading: const SizedBox(
             width: 24,
             height: 24,
             child: CircularProgressIndicator(strokeWidth: 2),
           ),
-          title: Text('AI...'),
+          title: Text(en ? 'Analyzing...' : 'در حال تحلیل...'),
         ),
       );
     }
@@ -714,28 +731,46 @@ class _AiAnalysisCard extends StatelessWidget {
       return Card(
         child: ListTile(
           leading: const Icon(Icons.error_outline),
-          title: Text(en ? 'AI unavailable' : 'AI در دسترس نیست'),
+          title: Text(en ? 'Analysis failed' : 'تحلیل ناموفق'),
           subtitle: Text(error!),
         ),
       );
     }
     final result = analysis;
     if (result == null) return const SizedBox.shrink();
+    final src = result.source == 'remote'
+        ? (en ? 'Cloud AI' : 'هوش ابری')
+        : (en ? 'On-device analyst' : 'تحلیلگر روی گوشی');
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(en ? 'AI Analyst' : 'تحلیل‌گر AI',
-                style: const TextStyle(fontWeight: FontWeight.bold)),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(en ? 'Analyst' : 'تحلیلگر',
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+                Chip(label: Text(src)),
+              ],
+            ),
             if (signal != null) Text('${signal!.symbol} • ${signal!.side}'),
             const SizedBox(height: 8),
             Text(result.summary),
             const Divider(),
             Text('${en ? 'Recommendation' : 'پیشنهاد'}: ${result.recommendation}'),
             Text('${en ? 'Trend' : 'روند'}: ${result.trend}'),
+            Text('${en ? 'Momentum' : 'مومنتوم'}: ${result.momentum}'),
             Text('${en ? 'Risk' : 'ریسک'}: ${result.riskLevel}'),
+            Text('${en ? 'Quality' : 'کیفیت'}: ${result.signalQuality}'),
+            Text('${en ? 'Confidence' : 'اطمینان'}: ${result.confidence}%'),
+            if (result.reasons.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(en ? 'Reasons' : 'دلایل',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              ...result.reasons.map((r) => Text('• $r')),
+            ],
           ],
         ),
       ),
