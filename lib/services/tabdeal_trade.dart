@@ -3,9 +3,9 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
-/// Signed Tabdeal client — HMAC matches official tabdeal-python:
-/// data_query = urlencode(params); HMAC-SHA256(secret, data_query).hexdigest()
-/// Spot only: POST /api/v1/order (not FAPI).
+import 'account_balance.dart';
+
+/// Signed Tabdeal client — Spot only (POST /api/v1/order).
 class TabdealTradeClient {
   TabdealTradeClient({
     required this.apiKey,
@@ -51,7 +51,7 @@ class TabdealTradeClient {
       final res = await _client
           .get(uri, headers: {
             'Accept': 'application/json',
-            'User-Agent': 'SignalYab-Phone/1.3',
+            'User-Agent': 'SignalYab-Phone/1.4',
           })
           .timeout(const Duration(seconds: 12));
       if (res.statusCode >= 200 && res.statusCode < 300) {
@@ -93,7 +93,7 @@ class TabdealTradeClient {
           'X-MBX-APIKEY': apiKey.trim(),
           'Content-Type': 'application/x-www-form-urlencoded',
           'Accept': 'application/json',
-          'User-Agent': 'SignalYab-Phone/1.3',
+          'User-Agent': 'SignalYab-Phone/1.4',
         };
 
         late http.Response res;
@@ -176,6 +176,15 @@ class TabdealTradeClient {
     return _signed(method: 'GET', path: '/r/api/v1/account');
   }
 
+  Future<AccountSnapshot> accountSnapshot() async {
+    try {
+      final raw = await account();
+      return AccountSnapshot.fromApi(raw);
+    } catch (e) {
+      return AccountSnapshot.unavailable('$e');
+    }
+  }
+
   Future<Map<String, dynamic>> openOrders({String? symbol}) async {
     await syncServerTime();
     final body = <String, String>{};
@@ -183,6 +192,21 @@ class TabdealTradeClient {
       body['symbol'] = _compact(symbol);
     }
     return _signed(method: 'GET', path: '/r/api/v1/openOrders', body: body);
+  }
+
+  Future<Map<String, dynamic>> getOrder({
+    required String symbol,
+    required int orderId,
+  }) async {
+    await syncServerTime();
+    return _signed(
+      method: 'GET',
+      path: '/r/api/v1/order',
+      body: {
+        'symbol': _compact(symbol),
+        'orderId': '$orderId',
+      },
+    );
   }
 
   String _qty(double q) {

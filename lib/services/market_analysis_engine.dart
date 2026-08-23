@@ -1,6 +1,6 @@
 import '../models/market_data.dart';
 
-/// Multi-timeframe technical scoring from real OHLCV only — no fake data.
+/// Multi-timeframe + market structure scoring from real OHLCV only.
 class MarketAnalysisEngine {
   double _ema(List<double> v, int period) {
     if (v.length < period) return v.isEmpty ? 0 : v.last;
@@ -43,6 +43,59 @@ class MarketAnalysisEngine {
     return trs.skip(trs.length - period).reduce((a, b) => a + b) / period;
   }
 
+  /// Swing structure: HH/HL vs LH/LL over last swings.
+  StructureSnapshot structure(List<Candle> candles) {
+    if (candles.length < 20) {
+      return const StructureSnapshot(available: false, note: 'داده ساختار کافی نیست');
+    }
+    final highs = <double>[];
+    final lows = <double>[];
+    for (var i = 2; i < candles.length - 2; i++) {
+      final h = candles[i].high;
+      final l = candles[i].low;
+      if (h >= candles[i - 1].high &&
+          h >= candles[i - 2].high &&
+          h >= candles[i + 1].high &&
+          h >= candles[i + 2].high) {
+        highs.add(h);
+      }
+      if (l <= candles[i - 1].low &&
+          l <= candles[i - 2].low &&
+          l <= candles[i + 1].low &&
+          l <= candles[i + 2].low) {
+        lows.add(l);
+      }
+    }
+    if (highs.length < 2 || lows.length < 2) {
+      return const StructureSnapshot(available: false, note: 'سویینگ کافی نیست');
+    }
+    final hh = highs[highs.length - 1] > highs[highs.length - 2];
+    final hl = lows[lows.length - 1] > lows[lows.length - 2];
+    final lh = highs[highs.length - 1] < highs[highs.length - 2];
+    final ll = lows[lows.length - 1] < lows[lows.length - 2];
+
+    String label;
+    if (hh && hl) {
+      label = 'HH_HL';
+    } else if (lh && ll) {
+      label = 'LH_LL';
+    } else if (hh && ll) {
+      label = 'EXPANDING';
+    } else {
+      label = 'MIXED';
+    }
+
+    final support = lows.last;
+    final resistance = highs.last;
+    return StructureSnapshot(
+      available: true,
+      label: label,
+      support: support,
+      resistance: resistance,
+      note: 'ساختار: $label | S=${support.toStringAsFixed(4)} R=${resistance.toStringAsFixed(4)}',
+    );
+  }
+
   TfSnapshot analyzeTf(List<Candle> candles, String label) {
     if (candles.length < 15) {
       return TfSnapshot(
@@ -63,6 +116,7 @@ class MarketAnalysisEngine {
         : vols.reduce((a, b) => a + b) / vols.length;
     final volLast = vols.last;
     final volRising = volLast > volAvg * 1.1;
+    final struct = structure(candles);
 
     String bias;
     if (ema9 > ema21 && rsi >= 48 && rsi <= 72) {
@@ -71,6 +125,12 @@ class MarketAnalysisEngine {
       bias = 'BEARISH';
     } else {
       bias = 'NEUTRAL';
+    }
+
+    // Structure reinforces bias
+    if (struct.available) {
+      if (struct.label == 'HH_HL' && bias != 'BEARISH') bias = 'BULLISH';
+      if (struct.label == 'LH_LL' && bias != 'BULLISH') bias = 'BEARISH';
     }
 
     return TfSnapshot(
@@ -83,11 +143,11 @@ class MarketAnalysisEngine {
       atr: atr,
       last: last,
       volumeRising: volRising,
-      note: '$label: $bias RSI=${rsi.toStringAsFixed(0)}',
+      structure: struct,
+      note: '$label: $bias RSI=${rsi.toStringAsFixed(0)} ${struct.available ? struct.label : ''}',
     );
   }
 
-  /// Weighted multi-TF score. Missing TF does not invent data — weight redistributed.
   ScoredAnalysis score({
     required MarketSignal signal,
     required Map<String, List<Candle>> candlesByTf,
@@ -108,36 +168,66 @@ class MarketAnalysisEngine {
         reasons: const ['داده تایم‌فریم کافی از صرافی دریافت نشد'],
         missing: const ['all timeframes'],
         snapshots: snapshots,
+        breakdown: const {},
       );
     }
 
-    // Weights: Trend(1h) 25, Momentum(15m) 20, Structure 15, Structure 15, Vol 10, S/R 10, Book 5
-    var score = 50.0;
+    final isLong = signal.side.toUpperCase() == 'LONG';
+    final breakdown = <String, double>{};
     final reasons = <String>[];
     final missing = <String>[];
-    final isLong = signal.side.toUpperCase() == 'LONG';
+    var total = 50.0;
 
+    // Multi-TF weights: 4h structure-ish, 1h trend, 15m momentum, 5m entry
+    double mtf = 0;
     for (final s in available) {
+      final w = switch (s.label) {
+        '4h' => 6.0,
+        '1h' => 5.0,
+        '15m' => 4.0,
+        '5m' => 3.0,
+        _ => 3.0,
+      };
       if (s.bias == 'BULLISH') {
-        score += isLong ? 8 : -6;
+        mtf += isLong ? w : -w * 0.8;
         reasons.add('${s.label}: صعودی');
       } else if (s.bias == 'BEARISH') {
-        score += isLong ? -6 : 8;
+        mtf += isLong ? -w * 0.8 : w;
         reasons.add('${s.label}: نزولی');
       } else {
         reasons.add('${s.label}: خنثی');
       }
       if (s.volumeRising) {
-        score += 3;
+        breakdown['volume'] = (breakdown['volume'] ?? 0) + 2;
         reasons.add('${s.label}: حجم افزایشی');
       }
+      if (s.structure.available) {
+        breakdown['structure'] = (breakdown['structure'] ?? 0) +
+            (s.structure.label == (isLong ? 'HH_HL' : 'LH_LL') ? 4 : 0);
+        reasons.add(s.structure.note);
+      }
     }
+    breakdown['mtf'] = mtf;
+    total += mtf;
+
     for (final s in snapshots.where((x) => !x.available)) {
       missing.add(s.label);
     }
 
-    // Order book if real depth present
-    var bookNote = 'اردربوک: در دسترس نیست';
+    // Conflict: higher TF vs lower TF → WAIT bias
+    final higher = available.where((s) => s.label == '1h' || s.label == '4h').toList();
+    final lower = available.where((s) => s.label == '5m' || s.label == '15m').toList();
+    if (higher.isNotEmpty && lower.isNotEmpty) {
+      final hb = higher.first.bias;
+      final lb = lower.first.bias;
+      if (hb != 'NEUTRAL' && lb != 'NEUTRAL' && hb != lb) {
+        total -= 12;
+        breakdown['conflict'] = -12;
+        reasons.add('تضاد تایم‌فریم بالا/پایین → احتیاط');
+      }
+    }
+
+    // Order book
     if (depth != null) {
       final bids = depth['bids'];
       final asks = depth['asks'];
@@ -151,9 +241,10 @@ class MarketAnalysisEngine {
         }
         if (b + a > 0) {
           final imb = (b - a) / (b + a);
-          score += isLong ? imb * 10 : -imb * 10;
-          bookNote = 'نبود تعادل اردربوک: ${imb.toStringAsFixed(2)}';
-          reasons.add(bookNote);
+          final bookPts = isLong ? imb * 10 : -imb * 10;
+          breakdown['orderbook'] = bookPts;
+          total += bookPts;
+          reasons.add('نبود تعادل اردربوک: ${(imb * 100).toStringAsFixed(1)}%');
         }
       } else {
         missing.add('orderbook');
@@ -162,34 +253,56 @@ class MarketAnalysisEngine {
       missing.add('orderbook');
     }
 
-    score = score.clamp(0, 100);
+    // R/R bonus
+    if (signal.riskReward >= 2) {
+      breakdown['rr'] = 8;
+      total += 8;
+      reasons.add('R/R مناسب 1:${signal.riskReward.toStringAsFixed(1)}');
+    } else if (signal.riskReward < 1.2) {
+      breakdown['rr'] = -10;
+      total -= 10;
+      reasons.add('R/R ضعیف');
+    }
+
+    total = total.clamp(0, 100);
     String direction;
-    if (score >= 62 && isLong) {
-      direction = 'LONG';
-    } else if (score >= 62 && !isLong) {
-      direction = 'SHORT';
-    } else if (score <= 40) {
-      direction = 'WAIT';
+    if (total >= 62) {
+      direction = isLong ? 'LONG' : 'SHORT';
     } else {
       direction = 'WAIT';
     }
-
-    // Selective: low score → WAIT
-    if (score < 58) direction = 'WAIT';
+    if (total < 58) direction = 'WAIT';
 
     final atrPct = signal.entry > 0 ? (signal.atr / signal.entry) * 100 : 0;
     final risk = atrPct >= 2.5 ? 'HIGH' : (atrPct >= 1.2 ? 'MEDIUM' : 'CONTROLLED');
 
     return ScoredAnalysis(
       direction: direction,
-      score: score,
-      confidence: score.round(),
+      score: total,
+      confidence: total.round(),
       riskLevel: risk,
       reasons: reasons,
       missing: missing,
       snapshots: snapshots,
+      breakdown: breakdown,
     );
   }
+}
+
+class StructureSnapshot {
+  final bool available;
+  final String label;
+  final double support;
+  final double resistance;
+  final String note;
+
+  const StructureSnapshot({
+    this.available = true,
+    this.label = 'UNKNOWN',
+    this.support = 0,
+    this.resistance = 0,
+    this.note = '',
+  });
 }
 
 class TfSnapshot {
@@ -202,6 +315,7 @@ class TfSnapshot {
   final double atr;
   final double last;
   final bool volumeRising;
+  final StructureSnapshot structure;
   final String note;
 
   const TfSnapshot({
@@ -214,6 +328,7 @@ class TfSnapshot {
     this.atr = 0,
     this.last = 0,
     this.volumeRising = false,
+    this.structure = const StructureSnapshot(available: false),
     this.note = '',
   });
 }
@@ -226,6 +341,7 @@ class ScoredAnalysis {
   final List<String> reasons;
   final List<String> missing;
   final List<TfSnapshot> snapshots;
+  final Map<String, double> breakdown;
 
   const ScoredAnalysis({
     required this.direction,
@@ -235,5 +351,6 @@ class ScoredAnalysis {
     required this.reasons,
     required this.missing,
     required this.snapshots,
+    this.breakdown = const {},
   });
 }
