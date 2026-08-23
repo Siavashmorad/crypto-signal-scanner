@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../models/market_data.dart';
 import '../services/chart_indicators.dart';
+import '../services/data_health.dart';
 import '../services/market_analysis_engine.dart';
 import '../services/tabdeal_api.dart';
 import '../services/tabdeal_ws.dart';
@@ -29,6 +30,7 @@ class MarketChartPage extends StatefulWidget {
 
 class _MarketChartPageState extends State<MarketChartPage> {
   final engine = MarketAnalysisEngine();
+  final health = DataHealthMonitor();
   String tf = '15m';
   List<Candle> candles = [];
   double? lastPrice;
@@ -36,10 +38,12 @@ class _MarketChartPageState extends State<MarketChartPage> {
   String? error;
   ScoredAnalysis? analysis;
   Timer? _poll;
+  Timer? _healthTick;
   Map<String, dynamic>? depth;
   String depthSource = 'rest';
   String wsStatus = 'idle';
   TabdealDepthSocket? _ws;
+  DataHealth dataHealth = DataHealth.offline;
 
   bool showEma20 = true;
   bool showEma50 = false;
@@ -47,6 +51,12 @@ class _MarketChartPageState extends State<MarketChartPage> {
   bool showBb = false;
   bool showVwap = false;
   bool showVolume = true;
+  bool showMacd = false;
+
+  // Viewport: show last [window] candles, shift with panOffset
+  double zoom = 1.0;
+  double panOffset = 0.0;
+  Offset? crosshair;
 
   Duration get _duration => switch (tf) {
         '5m' => const Duration(minutes: 5),
@@ -62,25 +72,36 @@ class _MarketChartPageState extends State<MarketChartPage> {
     _ws = TabdealDepthSocket(
       onDepth: (d) {
         if (!mounted) return;
+        health.markDepthOk(fromWs: true);
         setState(() {
           depth = d;
           depthSource = 'websocket';
+          dataHealth = health.evaluate();
         });
       },
       onStatus: (s) {
         if (!mounted) return;
-        setState(() => wsStatus = s);
+        health.setWsStatus(s);
+        setState(() {
+          wsStatus = s;
+          dataHealth = health.evaluate();
+        });
       },
     );
     _ws!.subscribe(widget.signal.symbol);
     _load();
-    // REST fallback for trades/candles + depth if WS quiet
-    _poll = Timer.periodic(const Duration(seconds: 15), (_) => _load(silent: true));
+    _poll =
+        Timer.periodic(const Duration(seconds: 15), (_) => _load(silent: true));
+    _healthTick = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted) return;
+      setState(() => dataHealth = health.evaluate());
+    });
   }
 
   @override
   void dispose() {
     _poll?.cancel();
+    _healthTick?.cancel();
     _ws?.dispose();
     super.dispose();
   }
@@ -94,17 +115,24 @@ class _MarketChartPageState extends State<MarketChartPage> {
     }
     try {
       final trades = await widget.api.trades(widget.signal.symbol, limit: 500);
+      health.markTradesOk();
       final c = widget.api.candlesFromTrades(trades, _duration);
-      // REST depth only if WS not providing
       if (depthSource != 'websocket' || depth == null) {
         final d = await widget.api.depth(widget.signal.symbol);
-        depth = d;
-        depthSource = 'rest';
+        final has =
+            (d['bids'] is List && (d['bids'] as List).isNotEmpty) ||
+            (d['asks'] is List && (d['asks'] as List).isNotEmpty);
+        if (has) {
+          health.markDepthOk(fromWs: false);
+          depth = d;
+          depthSource = 'rest';
+        }
       }
 
       final byTf = <String, List<Candle>>{
         '5m': widget.api.candlesFromTrades(trades, const Duration(minutes: 5)),
-        '15m': widget.api.candlesFromTrades(trades, const Duration(minutes: 15)),
+        '15m':
+            widget.api.candlesFromTrades(trades, const Duration(minutes: 15)),
         '1h': widget.api.candlesFromTrades(trades, const Duration(hours: 1)),
         '4h': widget.api.candlesFromTrades(trades, const Duration(hours: 4)),
       };
@@ -120,14 +148,17 @@ class _MarketChartPageState extends State<MarketChartPage> {
         lastPrice = trades.isEmpty ? null : trades.last.price;
         analysis = scored;
         loading = false;
+        dataHealth = health.evaluate();
         error = c.isEmpty
             ? (widget.english ? 'Not enough trades' : 'معامله کافی نیست')
             : null;
       });
     } catch (e) {
+      health.markRestFailed();
       if (!mounted) return;
       setState(() {
         loading = false;
+        dataHealth = health.evaluate();
         error = e.toString();
       });
     }
@@ -147,7 +178,8 @@ class _MarketChartPageState extends State<MarketChartPage> {
       for (final row in fills) {
         if (row is! Map) continue;
         final p = double.tryParse('${row['price'] ?? 0}') ?? 0;
-        final qty = double.tryParse('${row['qty'] ?? row['quantity'] ?? 0}') ?? 0;
+        final qty =
+            double.tryParse('${row['qty'] ?? row['quantity'] ?? 0}') ?? 0;
         if (p > 0 && qty > 0) {
           pq += p * qty;
           q += qty;
@@ -155,11 +187,31 @@ class _MarketChartPageState extends State<MarketChartPage> {
       }
       if (q > 0) return pq / q;
     }
-    final cum = double.tryParse('${f['cummulativeQuoteQty'] ?? f['cumulativeQuoteQty'] ?? 0}');
+    final cum = double.tryParse(
+        '${f['cummulativeQuoteQty'] ?? f['cumulativeQuoteQty'] ?? 0}');
     final exec = double.tryParse('${f['executedQty'] ?? 0}');
     if (cum != null && exec != null && exec > 0 && cum > 0) return cum / exec;
     return null;
   }
+
+  List<Candle> get _visible {
+    if (candles.isEmpty) return candles;
+    final n = candles.length;
+    final window = math.max(20, (n / zoom).round());
+    final maxStart = math.max(0, n - window);
+    final shift = (panOffset * window).round().clamp(-maxStart, maxStart);
+    var start = maxStart - shift;
+    start = start.clamp(0, maxStart);
+    final end = math.min(n, start + window);
+    return candles.sublist(start, end);
+  }
+
+  Color _healthColor() => switch (dataHealth) {
+        DataHealth.live => Colors.greenAccent,
+        DataHealth.degraded => Colors.orangeAccent,
+        DataHealth.stale => Colors.redAccent,
+        DataHealth.offline => Colors.grey,
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -167,7 +219,12 @@ class _MarketChartPageState extends State<MarketChartPage> {
     final s = widget.signal;
     final px = lastPrice ?? s.entry;
     final fillPx = realFillPrice;
-    final trail = candles.isNotEmpty ? engine.suggestedTrailDistance(candles) : null;
+    final trail =
+        candles.isNotEmpty ? engine.suggestedTrailDistance(candles) : null;
+    final vis = _visible;
+    final macdData = showMacd && candles.isNotEmpty
+        ? ChartIndicators.macd(candles)
+        : null;
 
     return Directionality(
       textDirection: en ? TextDirection.ltr : TextDirection.rtl,
@@ -176,7 +233,8 @@ class _MarketChartPageState extends State<MarketChartPage> {
           title: Text('${s.symbol} — ${en ? 'Chart' : 'نمودار'}'),
           actions: [
             IconButton(
-                onPressed: loading ? null : _load, icon: const Icon(Icons.refresh)),
+                onPressed: loading ? null : _load,
+                icon: const Icon(Icons.refresh)),
           ],
         ),
         body: ListView(
@@ -185,15 +243,39 @@ class _MarketChartPageState extends State<MarketChartPage> {
             Card(
               child: ListTile(
                 title: Text(s.symbol,
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 18)),
                 subtitle: Text(
                   '${en ? 'Price' : 'قیمت'}: ${px.toStringAsFixed(5)}\n'
                   '${isExecuted ? (en ? 'SPOT OPEN (fill ${fillPx?.toStringAsFixed(5) ?? '-'})' : 'اسپات باز (اجرا ${fillPx?.toStringAsFixed(5) ?? '-'})') : (en ? 'SIGNAL / NOT EXECUTED' : 'سیگنال / اجرا نشده')}\n'
                   'WS: $wsStatus · depth: $depthSource',
                 ),
-                trailing: Chip(label: Text('SPOT ${s.side}')),
+                trailing: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Chip(
+                      label: Text(dataHealth.label),
+                      backgroundColor: _healthColor().withOpacity(0.2),
+                      labelStyle: TextStyle(
+                          color: _healthColor(), fontWeight: FontWeight.bold),
+                    ),
+                    Chip(label: Text('SPOT ${s.side}')),
+                  ],
+                ),
               ),
             ),
+            if (dataHealth == DataHealth.stale ||
+                dataHealth == DataHealth.offline)
+              Card(
+                color: Colors.red.withOpacity(0.12),
+                child: ListTile(
+                  leading: const Icon(Icons.warning_amber),
+                  title: Text(en ? 'DATA STALE / OFFLINE' : 'داده کهنه / آفلاین'),
+                  subtitle: Text(en
+                      ? 'Prices are not live — do not trade on this view.'
+                      : 'قیمت زنده نیست — بر اساس این نما معامله نکنید.'),
+                ),
+              ),
             Wrap(
               spacing: 6,
               children: ['5m', '15m', '1h', '4h', '1D'].map((t) {
@@ -201,7 +283,11 @@ class _MarketChartPageState extends State<MarketChartPage> {
                   label: Text(t),
                   selected: tf == t,
                   onSelected: (_) {
-                    setState(() => tf = t);
+                    setState(() {
+                      tf = t;
+                      zoom = 1;
+                      panOffset = 0;
+                    });
                     _load();
                   },
                 );
@@ -237,6 +323,11 @@ class _MarketChartPageState extends State<MarketChartPage> {
                   onSelected: (v) => setState(() => showVwap = v),
                 ),
                 FilterChip(
+                  label: const Text('MACD'),
+                  selected: showMacd,
+                  onSelected: (v) => setState(() => showMacd = v),
+                ),
+                FilterChip(
                   label: Text(en ? 'Vol' : 'حجم'),
                   selected: showVolume,
                   onSelected: (v) => setState(() => showVolume = v),
@@ -252,28 +343,89 @@ class _MarketChartPageState extends State<MarketChartPage> {
             else if (error != null)
               Card(child: ListTile(title: Text(error!)))
             else
-              SizedBox(
-                height: 280,
-                child: Card(
-                  clipBehavior: Clip.antiAlias,
-                  child: CustomPaint(
-                    painter: _CandlePainter(
-                      candles: candles,
-                      entry: fillPx ?? s.entry,
-                      sl: s.stopLoss,
-                      tp1: s.tp1,
-                      tp2: s.tp2,
-                      tp3: s.tp3,
-                      ema20: showEma20 ? ChartIndicators.ema(candles, 20) : null,
-                      ema50: showEma50 ? ChartIndicators.ema(candles, 50) : null,
-                      ema200: showEma200 ? ChartIndicators.ema(candles, 200) : null,
-                      bb: showBb ? ChartIndicators.bollinger(candles) : null,
-                      vwap: showVwap ? ChartIndicators.vwap(candles) : null,
-                      showVolume: showVolume,
+              Column(
+                children: [
+                  SizedBox(
+                    height: 300,
+                    child: Card(
+                      clipBehavior: Clip.antiAlias,
+                      child: GestureDetector(
+                        onScaleUpdate: (d) {
+                          setState(() {
+                            zoom = (zoom * d.scale).clamp(1.0, 8.0);
+                            panOffset =
+                                (panOffset + d.focalPointDelta.dx / 200)
+                                    .clamp(-2.0, 2.0);
+                          });
+                        },
+                        onLongPressStart: (d) =>
+                            setState(() => crosshair = d.localPosition),
+                        onLongPressMoveUpdate: (d) =>
+                            setState(() => crosshair = d.localPosition),
+                        onLongPressEnd: (_) => setState(() => crosshair = null),
+                        onDoubleTap: () => setState(() {
+                          zoom = 1;
+                          panOffset = 0;
+                          crosshair = null;
+                        }),
+                        child: CustomPaint(
+                          painter: _CandlePainter(
+                            candles: vis,
+                            entry: fillPx ?? s.entry,
+                            sl: s.stopLoss,
+                            tp1: s.tp1,
+                            tp2: s.tp2,
+                            tp3: s.tp3,
+                            lastPrice: lastPrice,
+                            ema20: showEma20
+                                ? ChartIndicators.ema(vis, 20)
+                                : null,
+                            ema50: showEma50
+                                ? ChartIndicators.ema(vis, 50)
+                                : null,
+                            ema200: showEma200
+                                ? ChartIndicators.ema(vis, 200)
+                                : null,
+                            bb: showBb
+                                ? ChartIndicators.bollinger(vis)
+                                : null,
+                            vwap: showVwap
+                                ? ChartIndicators.vwap(vis)
+                                : null,
+                            showVolume: showVolume,
+                            crosshair: crosshair,
+                          ),
+                          child: const SizedBox.expand(),
+                        ),
+                      ),
                     ),
-                    child: const SizedBox.expand(),
                   ),
-                ),
+                  if (showMacd && macdData != null)
+                    SizedBox(
+                      height: 90,
+                      child: Card(
+                        clipBehavior: Clip.antiAlias,
+                        child: CustomPaint(
+                          painter: _MacdPainter(
+                            macd: macdData.macd,
+                            signal: macdData.signal,
+                            hist: macdData.hist,
+                            start: candles.isEmpty
+                                ? 0
+                                : candles.length - vis.length,
+                            length: vis.length,
+                          ),
+                          child: const SizedBox.expand(),
+                        ),
+                      ),
+                    ),
+                  Text(
+                    en
+                        ? 'Pinch zoom · drag pan · long-press crosshair · double-tap reset'
+                        : 'پینچ زوم · درگ جابجایی · نگه داشتن کراسهیر · دابل‌تپ ریست',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
               ),
             const SizedBox(height: 8),
             _orderBookCard(en),
@@ -281,7 +433,9 @@ class _MarketChartPageState extends State<MarketChartPage> {
             if (trail != null)
               Card(
                 child: ListTile(
-                  title: Text(en ? 'Suggested trail (analysis only)' : 'Trailing پیشنهادی (فقط تحلیل)'),
+                  title: Text(en
+                      ? 'Suggested trail (analysis only)'
+                      : 'Trailing پیشنهادی (فقط تحلیل)'),
                   subtitle: Text(
                     '${trail.toStringAsFixed(5)} — ${en ? 'NOT placed on exchange' : 'روی صرافی ثبت نمی‌شود'}',
                   ),
@@ -297,7 +451,7 @@ class _MarketChartPageState extends State<MarketChartPage> {
 
   Widget _orderBookCard(bool en) {
     final d = depth;
-    if (d == null) {
+    if (d == null || dataHealth == DataHealth.offline) {
       return Card(
         child: ListTile(
           title: Text(en ? 'Order book' : 'اردربوک'),
@@ -347,7 +501,8 @@ class _MarketChartPageState extends State<MarketChartPage> {
               '${en ? 'Order book' : 'اردربوک'} ($depthSource)',
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
-            Text('Bid: ${bidVol.toStringAsFixed(3)}  Ask: ${askVol.toStringAsFixed(3)}'),
+            Text(
+                'Bid: ${bidVol.toStringAsFixed(3)}  Ask: ${askVol.toStringAsFixed(3)}'),
             Text(
               'Imbalance: ${(imb * 100).toStringAsFixed(1)}%  '
               '${imb > 0.05 ? 'BUY' : (imb < -0.05 ? 'SELL' : 'NEUTRAL')}',
@@ -442,9 +597,11 @@ class _MarketChartPageState extends State<MarketChartPage> {
 class _CandlePainter extends CustomPainter {
   final List<Candle> candles;
   final double entry, sl, tp1, tp2, tp3;
+  final double? lastPrice;
   final List<double?>? ema20, ema50, ema200, vwap;
   final ({List<double?> mid, List<double?> upper, List<double?> lower})? bb;
   final bool showVolume;
+  final Offset? crosshair;
 
   _CandlePainter({
     required this.candles,
@@ -453,12 +610,14 @@ class _CandlePainter extends CustomPainter {
     required this.tp1,
     required this.tp2,
     required this.tp3,
+    this.lastPrice,
     this.ema20,
     this.ema50,
     this.ema200,
     this.bb,
     this.vwap,
     this.showVolume = true,
+    this.crosshair,
   });
 
   @override
@@ -474,6 +633,10 @@ class _CandlePainter extends CustomPainter {
     for (final p in [entry, sl, tp1, tp2, tp3]) {
       minP = math.min(minP, p);
       maxP = math.max(maxP, p);
+    }
+    if (lastPrice != null) {
+      minP = math.min(minP, lastPrice!);
+      maxP = math.max(maxP, lastPrice!);
     }
     final range = (maxP - minP).abs() < 1e-12 ? 1.0 : (maxP - minP);
 
@@ -491,7 +654,8 @@ class _CandlePainter extends CustomPainter {
       final tp = TextPainter(
         text: TextSpan(
           text: label,
-          style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w600),
+          style: TextStyle(
+              color: color, fontSize: 10, fontWeight: FontWeight.w600),
         ),
         textDirection: TextDirection.ltr,
       )..layout();
@@ -537,6 +701,9 @@ class _CandlePainter extends CustomPainter {
     level(tp1, Colors.greenAccent, 'TP1');
     level(tp2, Colors.green, 'TP2');
     level(tp3, Colors.tealAccent, 'TP3');
+    if (lastPrice != null) {
+      level(lastPrice!, Colors.white70, 'LAST');
+    }
 
     final n = candles.length;
     final cw = chartW / n;
@@ -562,13 +729,136 @@ class _CandlePainter extends CustomPainter {
         final vy = size.height - pad - vh;
         canvas.drawRect(
           Rect.fromLTRB(x - cw * 0.35, vy, x + cw * 0.35, size.height - pad),
-          Paint()..color = (up ? const Color(0x5526A69A) : const Color(0x55EF5350)),
+          Paint()
+            ..color =
+                (up ? const Color(0x5526A69A) : const Color(0x55EF5350)),
         );
       }
+    }
+
+    // Crosshair + price/time markers
+    if (crosshair != null) {
+      final cx = crosshair!.dx.clamp(pad, size.width - pad);
+      final cy = crosshair!.dy.clamp(pad, pad + chartH);
+      final paint = Paint()
+        ..color = Colors.white54
+        ..strokeWidth = 1;
+      canvas.drawLine(Offset(cx, pad), Offset(cx, pad + chartH), paint);
+      canvas.drawLine(Offset(pad, cy), Offset(size.width - pad, cy), paint);
+
+      final idx = ((cx - pad) / cw).floor().clamp(0, n - 1);
+      final price = maxP - ((cy - pad) / chartH) * range;
+      final c = candles[idx];
+      final label =
+          'P ${price.toStringAsFixed(4)}  O${c.open.toStringAsFixed(2)} H${c.high.toStringAsFixed(2)} L${c.low.toStringAsFixed(2)} C${c.close.toStringAsFixed(2)}';
+      final tp = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: const TextStyle(color: Colors.white, fontSize: 10),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: size.width - 24);
+      tp.paint(canvas, Offset(pad, 2));
     }
   }
 
   @override
   bool shouldRepaint(covariant _CandlePainter old) =>
-      old.candles != candles || old.entry != entry || old.showVolume != showVolume;
+      old.candles != candles ||
+      old.entry != entry ||
+      old.showVolume != showVolume ||
+      old.crosshair != crosshair ||
+      old.lastPrice != lastPrice;
+}
+
+class _MacdPainter extends CustomPainter {
+  final List<double?> macd, signal, hist;
+  final int start;
+  final int length;
+
+  _MacdPainter({
+    required this.macd,
+    required this.signal,
+    required this.hist,
+    required this.start,
+    required this.length,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (length <= 0) return;
+    final pad = 8.0;
+    final h = size.height - pad * 2;
+    final w = size.width - pad * 2;
+    canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFF0E1016));
+
+    double? minV, maxV;
+    for (var i = 0; i < length; i++) {
+      final idx = start + i;
+      if (idx < 0 || idx >= macd.length) continue;
+      for (final v in [macd[idx], signal[idx], hist[idx]]) {
+        if (v == null) continue;
+        minV = minV == null ? v : math.min(minV, v);
+        maxV = maxV == null ? v : math.max(maxV, v);
+      }
+    }
+    if (minV == null || maxV == null) return;
+    final range = (maxV - minV).abs() < 1e-12 ? 1.0 : (maxV - minV);
+    double yOf(double v) => pad + h * (1 - (v - minV!) / range);
+    final zeroY = yOf(0);
+    canvas.drawLine(
+      Offset(pad, zeroY),
+      Offset(size.width - pad, zeroY),
+      Paint()..color = Colors.white24,
+    );
+
+    final cw = w / length;
+    for (var i = 0; i < length; i++) {
+      final idx = start + i;
+      if (idx < 0 || idx >= hist.length) continue;
+      final hv = hist[idx];
+      if (hv == null) continue;
+      final x = pad + i * cw + cw / 2;
+      canvas.drawRect(
+        Rect.fromLTRB(x - cw * 0.3, yOf(hv), x + cw * 0.3, zeroY),
+        Paint()
+          ..color = hv >= 0 ? const Color(0x8826A69A) : const Color(0x88EF5350),
+      );
+    }
+
+    void drawSeries(List<double?> s, Color color) {
+      final path = Path();
+      var started = false;
+      for (var i = 0; i < length; i++) {
+        final idx = start + i;
+        if (idx < 0 || idx >= s.length) continue;
+        final v = s[idx];
+        if (v == null) continue;
+        final x = pad + i * cw + cw / 2;
+        final y = yOf(v);
+        if (!started) {
+          path.moveTo(x, y);
+          started = true;
+        } else {
+          path.lineTo(x, y);
+        }
+      }
+      if (started) {
+        canvas.drawPath(
+          path,
+          Paint()
+            ..color = color
+            ..strokeWidth = 1.2
+            ..style = PaintingStyle.stroke,
+        );
+      }
+    }
+
+    drawSeries(macd, const Color(0xFF42A5F5));
+    drawSeries(signal, const Color(0xFFFFA726));
+  }
+
+  @override
+  bool shouldRepaint(covariant _MacdPainter old) =>
+      old.macd != macd || old.start != start || old.length != length;
 }

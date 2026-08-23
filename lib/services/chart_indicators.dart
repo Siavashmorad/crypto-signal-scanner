@@ -20,6 +20,32 @@ class ChartIndicators {
     return out;
   }
 
+  /// EMA over a plain double series (for MACD signal line).
+  static List<double?> emaSeries(List<double?> values, int period) {
+    final out = List<double?>.filled(values.length, null);
+    if (period < 1) return out;
+    final k = 2 / (period + 1);
+    double? prev;
+    var seed = 0.0;
+    var count = 0;
+    for (var i = 0; i < values.length; i++) {
+      final v = values[i];
+      if (v == null) continue;
+      if (prev == null) {
+        seed += v;
+        count++;
+        if (count == period) {
+          prev = seed / period;
+          out[i] = prev;
+        }
+      } else {
+        prev = (v - prev) * k + prev;
+        out[i] = prev;
+      }
+    }
+    return out;
+  }
+
   static List<double?> sma(List<Candle> candles, int period) {
     final out = List<double?>.filled(candles.length, null);
     if (candles.length < period) return out;
@@ -33,7 +59,44 @@ class ChartIndicators {
     return out;
   }
 
-  /// Bollinger: SMA ± 2 * std of closes.
+  /// Classic MACD(12,26,9): line = EMA12-EMA26, signal = EMA9(line), hist = line-signal.
+  static ({
+    List<double?> macd,
+    List<double?> signal,
+    List<double?> hist,
+  }) macd(
+    List<Candle> candles, {
+    int fast = 12,
+    int slow = 26,
+    int signalPeriod = 9,
+  }) {
+    final n = candles.length;
+    final empty = (
+      macd: List<double?>.filled(n, null),
+      signal: List<double?>.filled(n, null),
+      hist: List<double?>.filled(n, null),
+    );
+    if (n < slow + signalPeriod) return empty;
+
+    final fastE = ema(candles, fast);
+    final slowE = ema(candles, slow);
+    final line = List<double?>.filled(n, null);
+    for (var i = 0; i < n; i++) {
+      final f = fastE[i];
+      final s = slowE[i];
+      if (f != null && s != null) line[i] = f - s;
+    }
+    final sig = emaSeries(line, signalPeriod);
+    final hist = List<double?>.filled(n, null);
+    for (var i = 0; i < n; i++) {
+      final m = line[i];
+      final g = sig[i];
+      if (m != null && g != null) hist[i] = m - g;
+    }
+    return (macd: line, signal: sig, hist: hist);
+  }
+
+  /// Bollinger: SMA ± 2 * std of closes (population std over period).
   static ({List<double?> mid, List<double?> upper, List<double?> lower}) bollinger(
     List<Candle> candles, {
     int period = 20,
@@ -50,8 +113,8 @@ class ChartIndicators {
         final d = closes[j] - m;
         varSum += d * d;
       }
-      final std = (varSum / period);
-      final s = std > 0 ? (std).isNaN ? 0.0 : _sqrt(std) : 0.0;
+      final std = varSum / period;
+      final s = std > 0 ? _sqrt(std) : 0.0;
       upper[i] = m + 2 * s;
       lower[i] = m - 2 * s;
     }
