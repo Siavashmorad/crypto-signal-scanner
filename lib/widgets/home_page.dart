@@ -57,6 +57,7 @@ class _HomePageState extends State<HomePage> {
   bool checkingLink = true;
   bool tabdealLinked = false;
   bool liveOn = false;
+  bool preferFutures = false;
   String timeframe = '15m';
   String? status;
   List<MarketSignal> signals = [];
@@ -83,8 +84,13 @@ class _HomePageState extends State<HomePage> {
   Future<void> _refreshTradeStatus() async {
     final has = await tradeStore.hasKeys();
     final live = await tradeStore.liveEnabled();
+    final p = await SharedPreferences.getInstance();
+    final prefer = p.getBool('prefer_futures_execution') ?? false;
     if (!mounted) return;
-    setState(() => liveOn = live && has);
+    setState(() {
+      liveOn = live && has;
+      preferFutures = prefer;
+    });
   }
 
   Future<void> _openDiagnose() async {
@@ -334,19 +340,23 @@ class _HomePageState extends State<HomePage> {
           child: Text(
             '${signal.symbol}\n'
             '${en ? 'Action' : 'عملیات'}: SPOT $side\n'
+            '${en ? 'Side' : 'جهت'}: ${signal.side}\n'
+            '${en ? 'Entry' : 'ورود'}: ${money(signal.entry)}\n'
+            '${en ? 'SL' : 'حد ضرر'}: ${money(signal.stopLoss)}\n'
+            '${en ? 'TP1' : 'هدف ۱'}: ${money(signal.tp1)}\n'
             '${en ? 'Available' : 'موجودی آزاد'} ($quote): ${available.toStringAsFixed(4)}\n'
             '${en ? 'Final qty' : 'حجم نهایی'}: ${size.finalQty}\n'
             '${size.message}\n\n'
-            '${en ? 'Spot only.' : 'فقط اسپات.'}',
+            '${en ? 'Spot only. No guaranteed profit.' : 'فقط اسپات. سود تضمینی نیست.'}',
           ),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: Text(en ? 'Cancel' : 'انصراف')),
+              child: Text(en ? 'Cancel' : 'لغو')),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: Text(en ? 'Send' : 'ارسال')),
+              child: Text(en ? 'Confirm & send' : 'تأیید و ارسال سفارش')),
         ],
       ),
     );
@@ -409,7 +419,18 @@ class _HomePageState extends State<HomePage> {
     );
     if (!gate.allowLive) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(gate.reason)));
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(en ? 'LIVE GATE' : 'قفل معامله زنده'),
+          content: Text(gate.reason),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(en ? 'OK' : 'باشه')),
+          ],
+        ),
+      );
       return;
     }
 
@@ -451,18 +472,36 @@ class _HomePageState extends State<HomePage> {
     final autoXfer = prefs.getBool('auto_transfer_futures') ?? false;
     final needConfirm = plan.needsTransfer ? !autoXfer : true;
     if (needConfirm) {
+      final sideLabel = plan.side.toUpperCase() == 'SHORT' ? 'SHORT' : 'LONG';
+      final xferLine = plan.needsTransfer && plan.transferAmount > 0
+          ? (en
+              ? 'Transfer Spot→Futures: ${plan.transferAmount.toStringAsFixed(4)}\n'
+              : 'انتقال اسپات→فیوچرز: ${plan.transferAmount.toStringAsFixed(4)}\n')
+          : (en ? 'No transfer needed\n' : 'نیازی به انتقال نیست\n');
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: Text(en ? 'FUTURES TRADE' : 'معامله فیوچرز'),
+          title: Text(en
+              ? 'Open FUTURES position'
+              : 'باز کردن پوزیشن FUTURES'),
           content: SingleChildScrollView(
             child: Text(
-              '${plan.symbol} ${plan.side}\n'
-              'Qty ${plan.size.quantity}\n'
-              'Margin ${plan.size.requiredMargin.toStringAsFixed(4)}\n'
-              'Transfer ${plan.transferAmount.toStringAsFixed(4)}\n'
-              'Spot ${plan.spotFree.toStringAsFixed(4)}  Fut ${plan.futuresAvailable.toStringAsFixed(4)}\n\n'
-              '${en ? "Only required margin will be transferred." : "فقط حاشیه مورد نیاز منتقل می‌شود."}',
+              '${plan.symbol}\n'
+              '${en ? 'Side' : 'جهت'}: $sideLabel\n'
+              '${en ? 'Entry' : 'ورود'}: ${money(plan.entry)}\n'
+              '${en ? 'Qty' : 'حجم'}: ${plan.size.quantity}\n'
+              '${en ? 'Leverage' : 'اهرم'}: ${plan.leverage.toStringAsFixed(0)}x\n'
+              '${en ? 'Required margin' : 'وجه موردنیاز'}: ${plan.size.requiredMargin.toStringAsFixed(4)}\n'
+              '${en ? 'Futures available' : 'موجودی فیوچرز'}: ${plan.futuresAvailable.toStringAsFixed(4)}\n'
+              '${en ? 'Spot free' : 'اسپات آزاد'}: ${plan.spotFree.toStringAsFixed(4)}\n'
+              '$xferLine'
+              '${en ? 'SL' : 'حد ضرر'}: ${money(plan.stopLoss)}\n'
+              '${en ? 'TP' : 'هدف'}: ${plan.takeProfit != null ? money(plan.takeProfit!) : '-'}\n'
+              '${en ? 'Risk' : 'ریسک'}: ${plan.size.riskAmount.toStringAsFixed(4)}\n'
+              '${en ? 'AI Quality' : 'کیفیت'}: $q\n'
+              '${en ? 'AI Score' : 'امتیاز'}: ${signal.confidence.toStringAsFixed(0)}\n'
+              '${en ? 'Gate' : 'گیت'}: PASS\n\n'
+              '${en ? 'Only exact required margin. No guaranteed profit.' : 'فقط حاشیه دقیق. سود تضمینی نیست.'}',
             ),
           ),
           actions: [
@@ -471,7 +510,9 @@ class _HomePageState extends State<HomePage> {
                 child: Text(en ? 'Cancel' : 'لغو')),
             FilledButton(
                 onPressed: () => Navigator.pop(ctx, true),
-                child: Text(en ? 'Confirm' : 'تأیید')),
+                child: Text(en
+                    ? 'Confirm & send order'
+                    : 'تأیید و ارسال سفارش')),
           ],
         ),
       );
@@ -486,19 +527,24 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) return;
 
     final slL = result.slActive
-        ? (en ? 'SL ACTIVE' : 'SL فعال')
-        : (en ? 'SL NOT CONFIRMED' : 'SL تأیید نشد');
+        ? (en ? 'SL: ACTIVE' : 'SL: فعال')
+        : (en ? 'SL: NOT CONFIRMED' : 'SL: تأیید نشد');
     final tpL = result.tpActive
-        ? (en ? 'TP ACTIVE' : 'TP فعال')
-        : (en ? 'TP NOT CONFIRMED' : 'TP تأیید نشد');
+        ? (en ? 'TP: ACTIVE' : 'TP: فعال')
+        : (en ? 'TP: NOT CONFIRMED' : 'TP: تأیید نشد');
+    final posL = result.ok && result.position != null
+        ? (en ? 'POSITION OPENED' : 'POSITION OPENED — پوزیشن باز شد')
+        : (result.ok
+            ? (en ? 'ORDER SENT' : 'سفارش ارسال شد')
+            : (en ? 'POSITION NOT CONFIRMED' : 'POSITION NOT CONFIRMED'));
 
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(result.ok
-            ? (en ? 'FUTURES POSITION' : 'پوزیشن فیوچرز')
+            ? (en ? 'FUTURES RESULT' : 'نتیجه فیوچرز')
             : (en ? 'FUTURES FAILED' : 'فیوچرز ناموفق')),
-        content: Text('${result.message}\n$slL\n$tpL'),
+        content: Text('${result.message}\n$posL\n$slL\n$tpL'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx),
@@ -512,6 +558,16 @@ class _HomePageState extends State<HomePage> {
     if (value >= 1000) return value.toStringAsFixed(2);
     if (value >= 1) return value.toStringAsFixed(5);
     return value.toStringAsFixed(8);
+  }
+
+  String _openButtonLabel(MarketSignal s, bool en) {
+    final side = s.side.toUpperCase() == 'SHORT' ? 'SHORT' : 'LONG';
+    if (preferFutures) {
+      return en
+          ? 'Open FUTURES — $side'
+          : 'باز کردن پوزیشن FUTURES — $side';
+    }
+    return en ? 'Execute SPOT order' : 'اجرای سفارش SPOT';
   }
 
   @override
@@ -548,14 +604,15 @@ class _HomePageState extends State<HomePage> {
             ),
             IconButton(
               tooltip: en ? 'Account' : 'حساب',
-              onPressed: () {
-                Navigator.of(context).push(MaterialPageRoute(
+              onPressed: () async {
+                await Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => AccountPage(
                     english: en,
                     currentUsername: widget.aiUsername ?? ownerUsername,
                     onLogout: widget.onLogout,
                   ),
                 ));
+                await _refreshTradeStatus();
               },
               icon: const Icon(Icons.person_outline),
             ),
@@ -615,6 +672,7 @@ class _HomePageState extends State<HomePage> {
                 child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Row(
                         children: [
@@ -650,8 +708,12 @@ class _HomePageState extends State<HomePage> {
                           padding: const EdgeInsets.only(top: 8),
                           child: Text(
                             en
-                                ? 'LIVE enabled — gate requires validated paper sample'
-                                : 'زنده فعال — گیت نیاز به نمونه پیپر معتبر دارد',
+                                ? (preferFutures
+                                    ? 'LIVE + FUTURES mode — gate requires paper sample'
+                                    : 'LIVE + SPOT mode — gate requires paper sample')
+                                : (preferFutures
+                                    ? 'زنده + فیوچرز — گیت نیاز به نمونه پیپر دارد'
+                                    : 'زنده + اسپات — گیت نیاز به نمونه پیپر دارد'),
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ),
@@ -671,27 +733,56 @@ class _HomePageState extends State<HomePage> {
                 ),
                 ...signals.take(10).map(
                       (s) => Card(
-                        child: ListTile(
-                          title: Text('${s.symbol} ${s.side}'),
-                          subtitle: Text(
-                            'E=${money(s.entry)} SL=${money(s.stopLoss)} '
-                            'TP1=${money(s.tp1)} RR=1:${s.riskReward.toStringAsFixed(1)}\n'
-                            'conf=${s.confidence.toStringAsFixed(0)}',
-                          ),
-                          isThreeLine: true,
-                          trailing: Wrap(
-                            spacing: 4,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              IconButton(
-                                  onPressed: () => _openChart(s),
-                                  icon: const Icon(Icons.show_chart)),
-                              IconButton(
-                                  onPressed: () => analyzeWithAi(s),
-                                  icon: const Icon(Icons.psychology)),
-                              IconButton(
-                                  onPressed: () =>
-                                      placeOnPhone(s, isOpen: true),
-                                  icon: const Icon(Icons.play_arrow)),
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: Text('${s.symbol} ${s.side}'),
+                                subtitle: Text(
+                                  'E=${money(s.entry)} SL=${money(s.stopLoss)} '
+                                  'TP1=${money(s.tp1)} RR=1:${s.riskReward.toStringAsFixed(1)}\n'
+                                  'conf=${s.confidence.toStringAsFixed(0)}',
+                                ),
+                                isThreeLine: true,
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      tooltip: en ? 'Chart' : 'نمودار',
+                                      onPressed: () => _openChart(s),
+                                      icon: const Icon(Icons.show_chart),
+                                    ),
+                                    IconButton(
+                                      tooltip: en ? 'AI' : 'تحلیل',
+                                      onPressed: () => analyzeWithAi(s),
+                                      icon: const Icon(Icons.psychology),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              FilledButton.icon(
+                                onPressed: () =>
+                                    placeOnPhone(s, isOpen: true),
+                                icon: Icon(
+                                  preferFutures
+                                      ? Icons.candlestick_chart
+                                      : Icons.shopping_cart_checkout,
+                                ),
+                                label: Text(
+                                  _openButtonLabel(s, en),
+                                  textAlign: TextAlign.center,
+                                ),
+                                style: FilledButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 12,
+                                    horizontal: 12,
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
                         ),
