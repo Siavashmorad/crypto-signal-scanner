@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/account_balance.dart';
+import '../services/futures_execution_service.dart';
 import '../services/local_trade_store.dart';
 import '../services/tabdeal_trade.dart';
 
@@ -74,6 +75,49 @@ class _WalletPageState extends State<WalletPage> {
   String _fmt(double v) {
     if (v.abs() >= 1) return v.toStringAsFixed(4);
     return v.toStringAsFixed(8);
+  }
+
+  Future<void> _closePosition(FuturesPosition p) async {
+    final en = widget.english;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(en ? 'Close Position' : 'بستن پوزیشن'),
+        content: Text(
+          '${en ? "Symbol" : "نماد"}: ${p.symbol}\n'
+          '${en ? "Side" : "جهت"}: ${p.isLong ? "LONG" : "SHORT"}\n'
+          '${en ? "Qty" : "حجم"}: ${_fmt(p.positionAmt.abs())}\n'
+          '${en ? "Entry" : "ورود"}: ${_fmt(p.entryPrice)}\n'
+          '${en ? "Mark" : "مارک"}: ${_fmt(p.markPrice)}\n'
+          'uPnL: ${_fmt(p.unRealizedProfit)}\n'
+          '${en ? "Leverage" : "اهرم"}: ${p.leverage.toStringAsFixed(0)}x',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(en ? 'Cancel' : 'لغو')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(en ? 'Confirm Close' : 'تأیید بستن'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final client = TabdealTradeClient(
+      apiKey: await store.apiKey(),
+      apiSecret: await store.apiSecret(),
+    );
+    final result =
+        await FuturesExecutionService(client).closePosition(p.symbol);
+    client.dispose();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(result.message),
+      backgroundColor: result.ok ? Colors.green : Colors.orange,
+    ));
+    await _load();
   }
 
   @override
@@ -170,6 +214,13 @@ class _WalletPageState extends State<WalletPage> {
                         'Lev ${p.leverage.toStringAsFixed(0)}x  Liq ${_fmt(p.liquidationPrice)}',
                       ),
                       isThreeLine: true,
+                      trailing: FilledButton(
+                        style: FilledButton.styleFrom(
+                            backgroundColor: Colors.red.shade700),
+                        onPressed: () => _closePosition(p),
+                        child: Text(en ? 'Close' : 'بستن',
+                            style: const TextStyle(fontSize: 12)),
+                      ),
                     ),
                   ),
                 ),
