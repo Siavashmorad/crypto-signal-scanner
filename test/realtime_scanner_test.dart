@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('SignalFingerprint', () {
-    test('same setup produces same key', () {
+    test('same setup produces same key for tiny price noise', () {
       final a = SignalFingerprint.fromOpportunity(
         symbol: 'BTCUSDT',
         side: 'LONG',
@@ -17,8 +17,11 @@ void main() {
         side: 'long',
         quality: 'A',
         score: 82,
-        entry: 65005,
+        entry: 65002,
       );
+      // score band is 5-pt; entry band is /10 for large prices
+      expect(a.scoreBand, b.scoreBand);
+      expect(a.entryBand, b.entryBand);
       expect(a.key, b.key);
     });
 
@@ -63,7 +66,8 @@ void main() {
       );
       final t0 = DateTime.utc(2026, 1, 1, 12);
       expect(n.shouldNotify(fp: fp, now: t0), isTrue);
-      expect(n.shouldNotify(fp: fp, now: t0.add(const Duration(minutes: 1))),
+      expect(
+          n.shouldNotify(fp: fp, now: t0.add(const Duration(minutes: 1))),
           isFalse);
     });
 
