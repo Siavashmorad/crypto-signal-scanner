@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'account_balance.dart';
 
-/// Signed Tabdeal client — Spot only (POST /api/v1/order).
+/// Signed Tabdeal client — Spot + official Futures (FAPI) endpoints only.
 class TabdealTradeClient {
   TabdealTradeClient({
     required this.apiKey,
@@ -103,6 +103,13 @@ class TabdealTradeClient {
                 Uri.parse('$host$path'),
                 headers: headers,
                 body: fullQuery,
+              )
+              .timeout(const Duration(seconds: 25));
+        } else if (method == 'DELETE') {
+          res = await _client
+              .delete(
+                Uri.parse('$host$path?$fullQuery'),
+                headers: headers,
               )
               .timeout(const Duration(seconds: 25));
         } else {
@@ -207,6 +214,159 @@ class TabdealTradeClient {
         'orderId': '$orderId',
       },
     );
+  }
+
+  // ─── Official Futures (FAPI) — docs.tabdeal.org ───
+
+  Future<Map<String, dynamic>> futuresBalance() async {
+    await syncServerTime();
+    return _signed(method: 'GET', path: '/r/fapi/v3/balance');
+  }
+
+  Future<FuturesBalanceSnapshot> futuresBalanceSnapshot() async {
+    try {
+      final raw = await futuresBalance();
+      final code = raw['code'];
+      final msg = '${raw['msg'] ?? raw['message'] ?? ''}'.toLowerCase();
+      if (code == 1207 ||
+          msg.contains('futures not active') ||
+          msg.contains('not active')) {
+        return FuturesBalanceSnapshot.notActive();
+      }
+      return FuturesBalanceSnapshot.fromApi(raw);
+    } catch (e) {
+      final s = '$e'.toLowerCase();
+      if (s.contains('1207') || s.contains('futures not active')) {
+        return FuturesBalanceSnapshot.notActive();
+      }
+      return FuturesBalanceSnapshot.unavailable('$e');
+    }
+  }
+
+  Future<Map<String, dynamic>> futuresAccount() async {
+    await syncServerTime();
+    return _signed(method: 'GET', path: '/r/fapi/v3/account');
+  }
+
+  Future<dynamic> futuresPositionRisk({String? symbol}) async {
+    await syncServerTime();
+    final body = <String, String>{};
+    if (symbol != null && symbol.isNotEmpty) {
+      body['symbol'] = _compact(symbol);
+    }
+    return _signed(method: 'GET', path: '/r/fapi/v3/positionRisk', body: body);
+  }
+
+  Future<FuturesPositionsSnapshot> futuresPositionsSnapshot(
+      {String? symbol}) async {
+    try {
+      final raw = await futuresPositionRisk(symbol: symbol);
+      if (raw is Map) {
+        final code = raw['code'];
+        final msg = '${raw['msg'] ?? raw['message'] ?? ''}'.toLowerCase();
+        if (code == 1207 || msg.contains('futures not active')) {
+          return FuturesPositionsSnapshot.notActive();
+        }
+      }
+      return FuturesPositionsSnapshot.fromApi(raw);
+    } catch (e) {
+      final s = '$e'.toLowerCase();
+      if (s.contains('1207') || s.contains('futures not active')) {
+        return FuturesPositionsSnapshot.notActive();
+      }
+      return FuturesPositionsSnapshot.unavailable('$e');
+    }
+  }
+
+  Future<Map<String, dynamic>> changeLeverage({
+    required String symbol,
+    required int leverage,
+  }) async {
+    if (leverage < 1) throw StateError('leverage must be >= 1');
+    await syncServerTime();
+    return _signed(method: 'POST', path: '/fapi/v1/leverage', body: {
+      'symbol': _compact(symbol),
+      'leverage': '$leverage',
+    });
+  }
+
+  /// type=2 Spot→Futures, type=1 Futures→Spot
+  Future<Map<String, dynamic>> transfer({
+    required int type,
+    required String asset,
+    required double amount,
+  }) async {
+    if (type != 1 && type != 2) throw StateError('transfer type must be 1 or 2');
+    if (amount <= 0) throw StateError('transfer amount must be > 0');
+    await syncServerTime();
+    return _signed(method: 'POST', path: '/fapi/v1/transfer', body: {
+      'type': '$type',
+      'asset': asset.toUpperCase(),
+      'amount': _qty(amount),
+    });
+  }
+
+  Future<Map<String, dynamic>> futuresMarketOrder({
+    required String symbol,
+    required String side,
+    required double quantity,
+  }) async {
+    await syncServerTime();
+    return _signed(method: 'POST', path: '/fapi/v1/order', body: {
+      'symbol': _compact(symbol),
+      'side': side.toUpperCase(),
+      'type': 'MARKET',
+      'quantity': _qty(quantity),
+    });
+  }
+
+  Future<Map<String, dynamic>> futuresGetOrder({
+    required String symbol,
+    required int orderId,
+  }) async {
+    await syncServerTime();
+    return _signed(method: 'GET', path: '/r/fapi/v1/order', body: {
+      'symbol': _compact(symbol),
+      'orderId': '$orderId',
+    });
+  }
+
+  Future<Map<String, dynamic>> futuresOpenOrders({String? symbol}) async {
+    await syncServerTime();
+    final body = <String, String>{};
+    if (symbol != null) body['symbol'] = _compact(symbol);
+    return _signed(method: 'GET', path: '/r/fapi/v1/openOrders', body: body);
+  }
+
+  /// Official: POST /fapi/v1/positionSlTp
+  Future<Map<String, dynamic>> futuresPositionSlTp({
+    required int positionId,
+    required String symbol,
+    double? slPrice,
+    double? tpPrice,
+    String workingType = 'MARK_PRICE',
+  }) async {
+    if (slPrice == null && tpPrice == null) {
+      throw StateError('at least one of slPrice or tpPrice required');
+    }
+    await syncServerTime();
+    final body = <String, String>{
+      'positionId': '$positionId',
+      'symbol': _compact(symbol),
+      'workingType': workingType,
+    };
+    if (slPrice != null) body['slPrice'] = _qty(slPrice);
+    if (tpPrice != null) body['tpPrice'] = _qty(tpPrice);
+    return _signed(method: 'POST', path: '/fapi/v1/positionSlTp', body: body);
+  }
+
+  /// Official: DELETE /fapi/v1/position
+  Future<Map<String, dynamic>> futuresClosePosition(
+      {required String symbol}) async {
+    await syncServerTime();
+    return _signed(method: 'DELETE', path: '/fapi/v1/position', body: {
+      'symbol': _compact(symbol),
+    });
   }
 
   String _qty(double q) {
