@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/market_data.dart';
 import '../services/account_balance.dart';
 import '../services/ai_analyst.dart';
+import '../services/futures_execution_service.dart';
 import '../services/live_trading_gate.dart';
 import '../services/local_trade_store.dart';
 import '../services/order_sizing.dart';
@@ -237,8 +238,10 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    // Futures branch reserved for when prefer_futures_execution is ON
-    // (execution service lands in next milestone). Spot path unchanged below.
+    if ((prefs.getBool('prefer_futures_execution') ?? false) && isOpen) {
+      await _placeFuturesOnPhone(signal);
+      return;
+    }
 
     final journal = await signalJournal.load();
     final q = signal.confidence >= 85
@@ -384,6 +387,125 @@ class _HomePageState extends State<HomePage> {
         content: Text(e.toString().replaceFirst('Bad state: ', '')),
       ));
     }
+  }
+
+  /// Real Futures path — LONG=BUY, SHORT=SELL via FAPI. Spot path untouched.
+  Future<void> _placeFuturesOnPhone(MarketSignal signal) async {
+    final en = widget.english;
+    final journal = await signalJournal.load();
+    final q = signal.confidence >= 85
+        ? 'A+'
+        : signal.confidence >= 72
+            ? 'A'
+            : signal.confidence >= 58
+                ? 'B'
+                : 'C';
+    final gate = liveGate.evaluate(
+      journal: journal,
+      quality: q,
+      regime: 'UNKNOWN',
+      userLiveEnabled: true,
+      dataHealthy: tabdealLinked,
+    );
+    if (!gate.allowLive) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(gate.reason)));
+      return;
+    }
+
+    final client = TabdealTradeClient(
+      apiKey: await tradeStore.apiKey(),
+      apiSecret: await tradeStore.apiSecret(),
+    );
+    final exec = FuturesExecutionService(client);
+    final filters = await rules.filtersFor(signal.symbol);
+    final entry = signal.entry;
+    if (entry <= 0) {
+      client.dispose();
+      return;
+    }
+    final sl = signal.stopLoss > 0
+        ? signal.stopLoss
+        : (signal.side.toUpperCase() == 'SHORT' ? entry * 1.01 : entry * 0.99);
+    final plan = await exec.buildPlan(
+      symbol: signal.symbol,
+      side: signal.side,
+      entry: entry,
+      stopLoss: sl,
+      takeProfit: signal.tp1 > 0 ? signal.tp1 : null,
+      riskPercent: 1.0,
+      leverage: 5,
+      filters: filters,
+    );
+    if (plan == null || !plan.size.allow) {
+      client.dispose();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(plan?.size.reason ??
+            (en ? 'Futures unavailable' : 'فیوچرز در دسترس نیست')),
+      ));
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final autoXfer = prefs.getBool('auto_transfer_futures') ?? false;
+    final needConfirm = plan.needsTransfer ? !autoXfer : true;
+    if (needConfirm) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(en ? 'FUTURES TRADE' : 'معامله فیوچرز'),
+          content: SingleChildScrollView(
+            child: Text(
+              '${plan.symbol} ${plan.side}\n'
+              'Qty ${plan.size.quantity}\n'
+              'Margin ${plan.size.requiredMargin.toStringAsFixed(4)}\n'
+              'Transfer ${plan.transferAmount.toStringAsFixed(4)}\n'
+              'Spot ${plan.spotFree.toStringAsFixed(4)}  Fut ${plan.futuresAvailable.toStringAsFixed(4)}\n\n'
+              '${en ? "Only required margin will be transferred." : "فقط حاشیه مورد نیاز منتقل می‌شود."}',
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(en ? 'Cancel' : 'لغو')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text(en ? 'Confirm' : 'تأیید')),
+          ],
+        ),
+      );
+      if (ok != true) {
+        client.dispose();
+        return;
+      }
+    }
+
+    final result = await exec.execute(plan);
+    client.dispose();
+    if (!mounted) return;
+
+    final slL = result.slActive
+        ? (en ? 'SL ACTIVE' : 'SL فعال')
+        : (en ? 'SL NOT CONFIRMED' : 'SL تأیید نشد');
+    final tpL = result.tpActive
+        ? (en ? 'TP ACTIVE' : 'TP فعال')
+        : (en ? 'TP NOT CONFIRMED' : 'TP تأیید نشد');
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(result.ok
+            ? (en ? 'FUTURES POSITION' : 'پوزیشن فیوچرز')
+            : (en ? 'FUTURES FAILED' : 'فیوچرز ناموفق')),
+        content: Text('${result.message}\n$slL\n$tpL'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(en ? 'OK' : 'باشه')),
+        ],
+      ),
+    );
   }
 
   String money(double value) {
