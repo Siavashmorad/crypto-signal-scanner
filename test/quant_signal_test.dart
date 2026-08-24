@@ -18,6 +18,7 @@ List<Candle> up(int n) => List.generate(n, (i) {
 MarketSignal sig() => MarketSignal(
       symbol: 'BTCUSDT',
       side: 'LONG',
+      timeframe: '15m',
       entry: 140,
       stopLoss: 130,
       tp1: 155,
@@ -26,7 +27,7 @@ MarketSignal sig() => MarketSignal(
       atr: 2,
       riskReward: 1.5,
       confidence: 50,
-      reason: 'test',
+      timestamp: DateTime.now(),
     );
 
 void main() {
