@@ -24,6 +24,8 @@ class _AccountPageState extends State<AccountPage> {
   bool emergencyStop = false;
   bool autoTransfer = false;
   bool preferFutures = false;
+  bool realtimeScanner = false;
+  bool realtimeNotify = true;
   bool hasKeys = false;
   String username = '';
   final store = LocalTradeStore();
@@ -52,6 +54,8 @@ class _AccountPageState extends State<AccountPage> {
       emergencyStop = p.getBool('emergency_stop') ?? false;
       autoTransfer = p.getBool('auto_transfer_futures') ?? false;
       preferFutures = p.getBool('prefer_futures_execution') ?? false;
+      realtimeScanner = p.getBool('realtime_futures_scanner') ?? false;
+      realtimeNotify = p.getBool('realtime_notify') ?? true;
       username = p.getString('signalyab_username') ?? widget.currentUsername;
       _userCtrl.text = username;
     });
@@ -71,7 +75,9 @@ class _AccountPageState extends State<AccountPage> {
     setState(() => username = name);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(widget.english ? 'Username updated (local)' : 'نام کاربری به‌روز شد (محلی)'),
+      content: Text(widget.english
+          ? 'Username updated (local)'
+          : 'نام کاربری به‌روز شد (محلی)'),
     ));
   }
 
@@ -81,18 +87,21 @@ class _AccountPageState extends State<AccountPage> {
     if (raw.length < 4) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(widget.english ? 'Min 4 characters' : 'حداقل ۴ کاراکتر'),
+        content:
+            Text(widget.english ? 'Min 4 characters' : 'حداقل ۴ کاراکتر'),
       ));
       return;
     }
-    // Simple local hash (not server auth). Never store plaintext.
-    final hash = raw.codeUnits.fold<int>(0, (a, b) => (a * 31 + b) & 0x7fffffff).toRadixString(16);
+    final hash = raw.codeUnits
+        .fold<int>(0, (a, b) => (a * 31 + b) & 0x7fffffff)
+        .toRadixString(16);
     final p = await SharedPreferences.getInstance();
     await p.setString('signalyab_password_hash', hash);
     _passCtrl.clear();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(widget.english ? 'Local password updated' : 'رمز محلی به‌روز شد'),
+      content: Text(
+          widget.english ? 'Local password updated' : 'رمز محلی به‌روز شد'),
     ));
   }
 
@@ -140,7 +149,9 @@ class _AccountPageState extends State<AccountPage> {
                     ),
                   ),
                 ),
-                TextButton(onPressed: _saveUsername, child: Text(en ? 'Save' : 'ذخیره')),
+                TextButton(
+                    onPressed: _saveUsername,
+                    child: Text(en ? 'Save' : 'ذخیره')),
               ],
             ),
             const SizedBox(height: 8),
@@ -157,7 +168,9 @@ class _AccountPageState extends State<AccountPage> {
                     ),
                   ),
                 ),
-                TextButton(onPressed: _savePassword, child: Text(en ? 'Save' : 'ذخیره')),
+                TextButton(
+                    onPressed: _savePassword,
+                    child: Text(en ? 'Save' : 'ذخیره')),
               ],
             ),
             const Divider(),
@@ -194,6 +207,35 @@ class _AccountPageState extends State<AccountPage> {
                   : 'فقط حاشیه مورد نیاز در صورت فعال بودن'),
               value: autoTransfer,
               onChanged: (v) => _setBool('auto_transfer_futures', v),
+            ),
+            const Divider(),
+            Text(en ? 'Real-Time Futures Scanner' : 'اسکنر لحظه‌ای فیوچرز',
+                style: Theme.of(context).textTheme.titleSmall),
+            SwitchListTile(
+              title: Text(en
+                  ? 'Real-Time Scanner (default OFF)'
+                  : 'اسکنر لحظه‌ای (پیش‌فرض خاموش)'),
+              subtitle: Text(en
+                  ? 'Auto-scan markets while app is open. No fake signals.'
+                  : 'پایش خودکار وقتی برنامه باز است. سیگنال جعلی نمی‌سازد.'),
+              value: realtimeScanner,
+              onChanged: (v) => _setBool('realtime_futures_scanner', v),
+            ),
+            SwitchListTile(
+              title: Text(en ? 'In-app alerts' : 'هشدار داخل برنامه'),
+              subtitle: Text(en
+                  ? 'A/A+ only; fingerprint prevents spam'
+                  : 'فقط A/A+؛ اثر انگشت جلوی تکرار را می‌گیرد'),
+              value: realtimeNotify,
+              onChanged: (v) => _setBool('realtime_notify', v),
+            ),
+            Text(
+              en
+                  ? 'OS background 24/7 is not guaranteed on Android. '
+                      'When no valid setup: NO VALID OPPORTUNITY.'
+                  : 'اجرای دائمی پس‌زمینه در اندروید تضمینی نیست. '
+                      'اگر فرصت معتبر نباشد: فرصت معتبری نیست.',
+              style: Theme.of(context).textTheme.bodySmall,
             ),
             const Divider(),
             ListTile(
