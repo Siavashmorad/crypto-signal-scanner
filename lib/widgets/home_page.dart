@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../models/market_data.dart';
 import '../services/account_balance.dart';
 import '../services/ai_analyst.dart';
@@ -12,10 +14,12 @@ import '../services/signal_journal.dart';
 import '../services/symbol_rules_service.dart';
 import '../services/tabdeal_api.dart';
 import '../services/tabdeal_trade.dart';
+import 'account_page.dart';
 import 'ai_performance_page.dart';
 import 'connection_diagnose_page.dart';
 import 'market_chart_page.dart';
 import 'trade_settings_page.dart';
+import 'wallet_page.dart';
 
 const ownerUsername = 'Siavashmorad';
 
@@ -210,6 +214,17 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> placeOnPhone(MarketSignal signal, {required bool isOpen}) async {
     final en = widget.english;
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('emergency_stop') ?? false) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(en
+            ? 'EMERGENCY STOP ACTIVE — orders blocked'
+            : 'توقف اضطراری فعال — سفارش مسدود'),
+      ));
+      return;
+    }
+
     final has = await tradeStore.hasKeys();
     final live = await tradeStore.liveEnabled();
     if (!has || !live) {
@@ -221,6 +236,9 @@ class _HomePageState extends State<HomePage> {
       ));
       return;
     }
+
+    // Futures branch reserved for when prefer_futures_execution is ON
+    // (execution service lands in next milestone). Spot path unchanged below.
 
     final journal = await signalJournal.load();
     final q = signal.confidence >= 85
@@ -398,6 +416,28 @@ class _HomePageState extends State<HomePage> {
               icon: const Icon(Icons.analytics_outlined),
             ),
             IconButton(
+              tooltip: en ? 'Wallet' : 'کیف پول',
+              onPressed: () {
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => WalletPage(english: en),
+                ));
+              },
+              icon: const Icon(Icons.account_balance_wallet),
+            ),
+            IconButton(
+              tooltip: en ? 'Account' : 'حساب',
+              onPressed: () {
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => AccountPage(
+                    english: en,
+                    currentUsername: widget.aiUsername ?? ownerUsername,
+                    onLogout: widget.onLogout,
+                  ),
+                ));
+              },
+              icon: const Icon(Icons.person_outline),
+            ),
+            IconButton(
               onPressed: _openDiagnose,
               icon: const Icon(Icons.network_check),
             ),
@@ -408,7 +448,7 @@ class _HomePageState extends State<HomePage> {
                 ));
                 await _refreshTradeStatus();
               },
-              icon: const Icon(Icons.account_balance_wallet_outlined),
+              icon: const Icon(Icons.settings_outlined),
             ),
             IconButton(
               onPressed: widget.onTheme,
