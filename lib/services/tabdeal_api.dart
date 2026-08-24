@@ -51,6 +51,10 @@ class TabdealApi {
   String _activeHost = hosts.first;
   String? lastErrorDetail;
 
+  /// Cached futures symbols from official FAPI exchangeInfo.
+  List<String>? _futuresSymbolCache;
+  DateTime? _futuresSymbolCacheAt;
+
   TabdealApi({
     http.Client? client,
     this.timeout = const Duration(seconds: 20),
@@ -97,9 +101,17 @@ class TabdealApi {
 
   Future<dynamic> rawExchangeInfo() => _get('/r/api/v1/exchangeInfo');
 
+  /// Official FAPI: GET /r/fapi/v1/exchangeInfo [NONE]
+  Future<dynamic> futuresExchangeInfo() => _get('/r/fapi/v1/exchangeInfo');
+
   Future<List<HostProbeResult>> diagnose() async {
     final results = <HostProbeResult>[];
-    const paths = ['/r/api/v1/time', '/r/api/v1/ping'];
+    const paths = [
+      '/r/api/v1/time',
+      '/r/api/v1/ping',
+      '/r/fapi/v1/ping',
+      '/r/fapi/v1/time',
+    ];
     for (final host in hosts) {
       for (final path in paths) {
         final started = DateTime.now();
@@ -159,6 +171,59 @@ class TabdealApi {
       }
     }
     return s;
+  }
+
+  /// Active Futures symbols from official FAPI exchangeInfo (cached ~10m).
+  Future<List<String>> activeFuturesSymbols({int maxSymbols = 40}) async {
+    final now = DateTime.now();
+    if (_futuresSymbolCache != null &&
+        _futuresSymbolCacheAt != null &&
+        now.difference(_futuresSymbolCacheAt!) < const Duration(minutes: 10)) {
+      return _futuresSymbolCache!.take(maxSymbols).toList();
+    }
+    try {
+      final payload = await futuresExchangeInfo();
+      final raw = payload is Map
+          ? (payload['symbols'] ?? payload['data'] ?? payload)
+          : payload;
+      if (raw is! List) {
+        return activeUsdtSymbols(maxSymbols: maxSymbols);
+      }
+      final found = <String>{};
+      for (final item in raw) {
+        if (item is! Map) continue;
+        final status =
+            '${item['status'] ?? item['contractStatus'] ?? 'TRADING'}'
+                .toUpperCase();
+        if (status.contains('BREAK') ||
+            status.contains('HALT') ||
+            status == 'INACTIVE') {
+          continue;
+        }
+        final symbol = normalizeSymbol(
+            '${item['symbol'] ?? item['tabdealSymbol'] ?? item['name'] ?? ''}');
+        if (symbol.isEmpty) continue;
+        if (symbol.endsWith('USDT') ||
+            symbol.endsWith('IRT') ||
+            symbol.endsWith('TMN')) {
+          found.add(symbol);
+        }
+      }
+      if (found.isEmpty) return activeUsdtSymbols(maxSymbols: maxSymbols);
+      final ordered = <String>[];
+      for (final p in fallbackSymbols) {
+        if (found.contains(p)) ordered.add(p);
+      }
+      for (final s in found) {
+        if (!ordered.contains(s)) ordered.add(s);
+        if (ordered.length >= maxSymbols) break;
+      }
+      _futuresSymbolCache = ordered;
+      _futuresSymbolCacheAt = now;
+      return ordered.take(maxSymbols).toList();
+    } catch (_) {
+      return activeUsdtSymbols(maxSymbols: maxSymbols);
+    }
   }
 
   Future<List<String>> activeUsdtSymbols({int maxSymbols = 40}) async {
@@ -252,10 +317,32 @@ class TabdealApi {
     return {'bids': [], 'asks': []};
   }
 
+  /// Official FAPI depth: GET /r/fapi/v1/depth [NONE]
+  Future<Map<String, dynamic>> futuresDepth(String symbol,
+      {int limit = 20}) async {
+    final sym = normalizeSymbol(symbol);
+    for (final q in [
+      {'symbol': sym, 'limit': '$limit'},
+      {'tabdealSymbol': toTabdealSymbol(sym), 'limit': '$limit'},
+    ]) {
+      try {
+        final payload = await _get('/r/fapi/v1/depth', q);
+        if (payload is Map &&
+            ((payload['bids'] is List && (payload['bids'] as List).isNotEmpty) ||
+                (payload['asks'] is List &&
+                    (payload['asks'] as List).isNotEmpty))) {
+          return Map<String, dynamic>.from(payload);
+        }
+      } catch (_) {}
+    }
+    return depth(symbol);
+  }
+
   /// Build OHLCV candles from real trades (Tabdeal has no public kline in spot docs).
   List<Candle> candlesFromTrades(List<TradePoint> trades, Duration tf) {
     if (trades.isEmpty) return const [];
-    final sorted = [...trades]..sort((a, b) => a.timestampMs.compareTo(b.timestampMs));
+    final sorted = [...trades]
+      ..sort((a, b) => a.timestampMs.compareTo(b.timestampMs));
     final bucketMs = tf.inMilliseconds;
     final map = <int, Candle>{};
     for (final t in sorted) {
@@ -281,6 +368,7 @@ class TabdealApi {
         );
       }
     }
-    return map.values.toList()..sort((a, b) => a.timestampMs.compareTo(b.timestampMs));
+    return map.values.toList()
+      ..sort((a, b) => a.timestampMs.compareTo(b.timestampMs));
   }
 }
