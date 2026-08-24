@@ -5,6 +5,9 @@ import 'market_analysis_engine.dart';
 import 'market_regime.dart';
 import 'trade_filter_engine.dart';
 
+export 'market_regime.dart' show MarketRegime, MarketRegimeLabel, MarketRegimeDetector, RegimeSnapshot;
+export 'trade_filter_engine.dart' show FilterVerdict, FilterResult, TradeFilterEngine;
+
 enum TradeQuality { aPlus, a, b, c, noTrade }
 
 extension TradeQualityLabel on TradeQuality {
@@ -47,11 +50,19 @@ class QuantWeights {
   });
 
   double get total =>
-      trend + structure + momentum + volume + mtf + orderFlow + sr + regime + riskReward;
+      trend +
+      structure +
+      momentum +
+      volume +
+      mtf +
+      orderFlow +
+      sr +
+      regime +
+      riskReward;
 }
 
 class QuantDecision {
-  final String direction; // LONG SHORT WAIT
+  final String direction;
   final double score;
   final int confidence;
   final TradeQuality quality;
@@ -97,7 +108,6 @@ class QuantDecision {
 }
 
 /// Multi-layer quant engine on top of existing MarketAnalysisEngine.
-/// Does not invent prices — only real candles + depth.
 class QuantSignalEngine {
   QuantSignalEngine({
     MarketAnalysisEngine? analysis,
@@ -145,15 +155,14 @@ class QuantSignalEngine {
     final reasons = <String>[...base.reasons];
     final missing = <String>[...base.missing];
 
-    // --- Feature scores (0..weight) ---
     double trendPts = 0;
     if (primary.length >= 50) {
-      final e20 = ChartIndicators.ema(primary, 20).lastWhere((e) => e != null,
-          orElse: () => null);
-      final e50 = ChartIndicators.ema(primary, 50).lastWhere((e) => e != null,
-          orElse: () => null);
-      final e200 = ChartIndicators.ema(primary, 200).lastWhere((e) => e != null,
-          orElse: () => null);
+      final e20 = ChartIndicators.ema(primary, 20)
+          .lastWhere((e) => e != null, orElse: () => null);
+      final e50 = ChartIndicators.ema(primary, 50)
+          .lastWhere((e) => e != null, orElse: () => null);
+      final e200 = ChartIndicators.ema(primary, 200)
+          .lastWhere((e) => e != null, orElse: () => null);
       if (e20 != null && e50 != null) {
         final alignLong = e20 > e50 && (e200 == null || e50 > e200);
         final alignShort = e20 < e50 && (e200 == null || e50 < e200);
@@ -174,7 +183,6 @@ class QuantSignalEngine {
     }
     breakdown['trend'] = trendPts;
 
-    // Structure from base MTF
     double structPts = 0;
     final structOk = base.snapshots.any((s) =>
         s.available &&
@@ -191,7 +199,6 @@ class QuantSignalEngine {
     }
     breakdown['structure'] = structPts;
 
-    // Momentum RSI / MACD / Stoch
     double momPts = 0;
     final rsi = ChartIndicators.lastRsi(primary);
     final macd = ChartIndicators.macd(primary);
@@ -220,7 +227,6 @@ class QuantSignalEngine {
     }
     breakdown['momentum'] = momPts.clamp(0, weights.momentum);
 
-    // Volume
     double volPts = 0;
     final relVol = ChartIndicators.relativeVolume(primary);
     if (relVol != null) {
@@ -230,7 +236,6 @@ class QuantSignalEngine {
       } else if (relVol >= 0.8) {
         volPts = weights.volume * 0.5;
       } else {
-        volPts = 0;
         reasons.add('weak relative volume');
       }
     } else {
@@ -238,12 +243,9 @@ class QuantSignalEngine {
     }
     breakdown['volume'] = volPts;
 
-    // MTF from base score component
     final mtfRaw = (base.breakdown['mtf'] ?? 0).clamp(-20.0, 20.0);
-    final mtfPts = ((mtfRaw + 20) / 40) * weights.mtf;
-    breakdown['mtf'] = mtfPts;
+    breakdown['mtf'] = ((mtfRaw + 20) / 40) * weights.mtf;
 
-    // Order flow
     double ofPts = 0;
     final spreadBps = TradeFilterEngine.spreadBpsFromDepth(depth);
     if (depth != null) {
@@ -279,13 +281,11 @@ class QuantSignalEngine {
     }
     breakdown['orderFlow'] = ofPts;
 
-    // S/R proximity
     double srPts = 0;
     final atr = ChartIndicators.lastAtr(primary) ?? signal.atr;
     if (primary.length >= 20 && atr > 0) {
-      // crude swing S/R
-      var res = primary.map((c) => c.high).reduce((a, b) => a > b ? a : b);
-      var sup = primary.map((c) => c.low).reduce((a, b) => a < b ? a : b);
+      final res = primary.map((c) => c.high).reduce((a, b) => a > b ? a : b);
+      final sup = primary.map((c) => c.low).reduce((a, b) => a < b ? a : b);
       final px = primary.last.close;
       if (isLong && (px - sup).abs() <= atr * 1.5) {
         srPts = weights.sr;
@@ -301,7 +301,6 @@ class QuantSignalEngine {
     }
     breakdown['sr'] = srPts;
 
-    // Regime points
     double regimePts = 0;
     final reg = regimeSnap.regime;
     if (reg == MarketRegime.trendingBull && isLong) {
@@ -312,17 +311,14 @@ class QuantSignalEngine {
       regimePts = weights.regime * 0.8;
     } else if (reg == MarketRegime.breakdown && !isLong) {
       regimePts = weights.regime * 0.8;
-    } else if (reg == MarketRegime.choppy) {
-      regimePts = 0;
-    } else {
+    } else if (reg != MarketRegime.choppy) {
       regimePts = weights.regime * 0.3;
     }
     breakdown['regime'] = regimePts;
     reasons.add('regime ${reg.label}: ${regimeSnap.note}');
 
-    // R/R
-    double rrPts = 0;
     final rr = signal.riskReward;
+    double rrPts = 0;
     if (rr >= 2.5) {
       rrPts = weights.riskReward;
     } else if (rr >= 1.8) {
@@ -336,7 +332,6 @@ class QuantSignalEngine {
     final maxW = weights.total <= 0 ? 100.0 : weights.total;
     score = (score / maxW * 100).clamp(0, 100);
 
-    // MTF conflict detection
     final higher = base.snapshots
         .where((s) => s.available && (s.label == '1h' || s.label == '4h'))
         .toList();
@@ -350,7 +345,6 @@ class QuantSignalEngine {
       if (hb != 'NEUTRAL' && lb != 'NEUTRAL' && hb != lb) conflict = true;
     }
 
-    final weakStruct = !structOk;
     final atrPct = regimeSnap.atrPct ??
         (signal.entry > 0 ? (signal.atr / signal.entry) * 100 : null);
 
@@ -362,21 +356,18 @@ class QuantSignalEngine {
       spreadBps: spreadBps,
       relativeVolume: relVol,
       timeframeConflict: conflict,
-      weakStructure: weakStruct && score < 70,
+      weakStructure: !structOk && score < 70,
       minOrderViolatesRisk: minOrderViolatesRisk,
       insufficientBalance: insufficientBalance,
       orderBookUnavailable: depth == null,
     );
 
-    // Adaptive entry zone from ATR + structure
     final px = primary.isNotEmpty ? primary.last.close : signal.entry;
     final zonePad = (atr > 0 ? atr * 0.35 : px * 0.002);
     final entryLow = isLong ? px - zonePad : px - zonePad * 0.5;
     final entryHigh = isLong ? px + zonePad * 0.5 : px + zonePad;
 
-    // Adaptive SL/TP suggestions (analysis only)
-    double? sugSl;
-    double? tp1, tp2, tp3;
+    double? sugSl, tp1, tp2, tp3;
     if (atr > 0) {
       if (isLong) {
         sugSl = px - atr * 1.4;
@@ -403,7 +394,9 @@ class QuantSignalEngine {
       direction = 'WAIT';
     } else if (direction == 'WAIT' || score < minScorePaper) {
       quality = TradeQuality.c;
-    } else if (score >= 85 && filter.verdict == FilterVerdict.pass && !conflict) {
+    } else if (score >= 85 &&
+        filter.verdict == FilterVerdict.pass &&
+        !conflict) {
       quality = TradeQuality.aPlus;
     } else if (score >= minScoreLive && filter.verdict == FilterVerdict.pass) {
       quality = TradeQuality.a;
@@ -413,16 +406,11 @@ class QuantSignalEngine {
       quality = TradeQuality.c;
     }
 
-    // Confidence: blend score with hard filter state
     var conf = score;
     if (filter.verdict != FilterVerdict.pass) conf *= 0.7;
     if (conflict) conf *= 0.85;
     if (dataHealth == DataHealth.degraded) conf *= 0.9;
     conf = conf.clamp(0, 100);
-
-    final invalidation = isLong
-        ? 'Invalid if close below structure/SL zone'
-        : 'Invalid if close above structure/SL zone';
 
     return QuantDecision(
       direction: direction,
@@ -443,7 +431,9 @@ class QuantSignalEngine {
       suggestedTp2: tp2 ?? signal.tp2,
       suggestedTp3: tp3 ?? signal.tp3,
       riskReward: rr,
-      invalidation: invalidation,
+      invalidation: isLong
+          ? 'Invalid if close below structure/SL zone'
+          : 'Invalid if close above structure/SL zone',
       baseAnalysis: base,
     );
   }
