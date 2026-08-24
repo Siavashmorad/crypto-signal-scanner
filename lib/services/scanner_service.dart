@@ -107,6 +107,10 @@ class ScannerService {
 
   Future<Map<String, dynamic>> _depth(String symbol) async {
     try {
+      final d = await api.futuresDepth(symbol);
+      if ((d['bids'] as List?)?.isNotEmpty == true) return d;
+    } catch (_) {}
+    try {
       final d = await api.depth(symbol);
       if ((d['bids'] as List?)?.isNotEmpty == true) return d;
     } catch (_) {}
@@ -198,9 +202,14 @@ class ScannerService {
     dataSource = 'none';
     List<String> symbols;
     try {
-      symbols = await api.activeUsdtSymbols(maxSymbols: maxSymbols);
+      // Prefer official FAPI universe when available.
+      symbols = await api.activeFuturesSymbols(maxSymbols: maxSymbols);
     } catch (_) {
-      symbols = TabdealApi.fallbackSymbols.take(maxSymbols).toList();
+      try {
+        symbols = await api.activeUsdtSymbols(maxSymbols: maxSymbols);
+      } catch (_) {
+        symbols = TabdealApi.fallbackSymbols.take(maxSymbols).toList();
+      }
     }
     final signals = <MarketSignal>[];
     for (var start = 0; start < symbols.length; start += maxConcurrency) {
