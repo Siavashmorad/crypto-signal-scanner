@@ -7,6 +7,7 @@ import '../models/market_data.dart';
 import '../services/chart_indicators.dart';
 import '../services/data_health.dart';
 import '../services/market_analysis_engine.dart';
+import '../services/quant_signal_engine.dart';
 import '../services/tabdeal_api.dart';
 import '../services/tabdeal_ws.dart';
 
@@ -30,6 +31,7 @@ class MarketChartPage extends StatefulWidget {
 
 class _MarketChartPageState extends State<MarketChartPage> {
   final engine = MarketAnalysisEngine();
+  final quant = QuantSignalEngine();
   final health = DataHealthMonitor();
   String tf = '15m';
   List<Candle> candles = [];
@@ -37,6 +39,7 @@ class _MarketChartPageState extends State<MarketChartPage> {
   bool loading = true;
   String? error;
   ScoredAnalysis? analysis;
+  QuantDecision? quantDecision;
   Timer? _poll;
   Timer? _healthTick;
   Map<String, dynamic>? depth;
@@ -53,7 +56,6 @@ class _MarketChartPageState extends State<MarketChartPage> {
   bool showVolume = true;
   bool showMacd = false;
 
-  // Viewport: show last [window] candles, shift with panOffset
   double zoom = 1.0;
   double panOffset = 0.0;
   Offset? crosshair;
@@ -141,12 +143,19 @@ class _MarketChartPageState extends State<MarketChartPage> {
         candlesByTf: byTf,
         depth: depth,
       );
+      final q = quant.evaluate(
+        signal: widget.signal,
+        candlesByTf: byTf,
+        depth: depth,
+        dataHealth: health.evaluate(),
+      );
 
       if (!mounted) return;
       setState(() {
         candles = c;
         lastPrice = trades.isEmpty ? null : trades.last.price;
         analysis = scored;
+        quantDecision = q;
         loading = false;
         dataHealth = health.evaluate();
         error = c.isEmpty
@@ -222,9 +231,8 @@ class _MarketChartPageState extends State<MarketChartPage> {
     final trail =
         candles.isNotEmpty ? engine.suggestedTrailDistance(candles) : null;
     final vis = _visible;
-    final macdData = showMacd && candles.isNotEmpty
-        ? ChartIndicators.macd(candles)
-        : null;
+    final macdData =
+        showMacd && candles.isNotEmpty ? ChartIndicators.macd(candles) : null;
 
     return Directionality(
       textDirection: en ? TextDirection.ltr : TextDirection.rtl,
@@ -298,48 +306,39 @@ class _MarketChartPageState extends State<MarketChartPage> {
               spacing: 4,
               children: [
                 FilterChip(
-                  label: const Text('EMA20'),
-                  selected: showEma20,
-                  onSelected: (v) => setState(() => showEma20 = v),
-                ),
+                    label: const Text('EMA20'),
+                    selected: showEma20,
+                    onSelected: (v) => setState(() => showEma20 = v)),
                 FilterChip(
-                  label: const Text('EMA50'),
-                  selected: showEma50,
-                  onSelected: (v) => setState(() => showEma50 = v),
-                ),
+                    label: const Text('EMA50'),
+                    selected: showEma50,
+                    onSelected: (v) => setState(() => showEma50 = v)),
                 FilterChip(
-                  label: const Text('EMA200'),
-                  selected: showEma200,
-                  onSelected: (v) => setState(() => showEma200 = v),
-                ),
+                    label: const Text('EMA200'),
+                    selected: showEma200,
+                    onSelected: (v) => setState(() => showEma200 = v)),
                 FilterChip(
-                  label: const Text('BB'),
-                  selected: showBb,
-                  onSelected: (v) => setState(() => showBb = v),
-                ),
+                    label: const Text('BB'),
+                    selected: showBb,
+                    onSelected: (v) => setState(() => showBb = v)),
                 FilterChip(
-                  label: const Text('VWAP'),
-                  selected: showVwap,
-                  onSelected: (v) => setState(() => showVwap = v),
-                ),
+                    label: const Text('VWAP'),
+                    selected: showVwap,
+                    onSelected: (v) => setState(() => showVwap = v)),
                 FilterChip(
-                  label: const Text('MACD'),
-                  selected: showMacd,
-                  onSelected: (v) => setState(() => showMacd = v),
-                ),
+                    label: const Text('MACD'),
+                    selected: showMacd,
+                    onSelected: (v) => setState(() => showMacd = v)),
                 FilterChip(
-                  label: Text(en ? 'Vol' : 'حجم'),
-                  selected: showVolume,
-                  onSelected: (v) => setState(() => showVolume = v),
-                ),
+                    label: Text(en ? 'Vol' : 'حجم'),
+                    selected: showVolume,
+                    onSelected: (v) => setState(() => showVolume = v)),
               ],
             ),
             const SizedBox(height: 8),
             if (loading)
               const SizedBox(
-                height: 220,
-                child: Center(child: CircularProgressIndicator()),
-              )
+                  height: 220, child: Center(child: CircularProgressIndicator()))
             else if (error != null)
               Card(child: ListTile(title: Text(error!)))
             else
@@ -419,12 +418,6 @@ class _MarketChartPageState extends State<MarketChartPage> {
                         ),
                       ),
                     ),
-                  Text(
-                    en
-                        ? 'Pinch zoom · drag pan · long-press crosshair · double-tap reset'
-                        : 'پینچ زوم · درگ جابجایی · نگه داشتن کراسهیر · دابل‌تپ ریست',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
                 ],
               ),
             const SizedBox(height: 8),
@@ -441,8 +434,51 @@ class _MarketChartPageState extends State<MarketChartPage> {
                   ),
                 ),
               ),
+            if (quantDecision != null) _quantCard(en, quantDecision!),
             if (analysis != null) _aiCard(en, analysis!),
             if (isExecuted) _fillCard(en, widget.lastOrderFill!),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _quantCard(bool en, QuantDecision q) {
+    return Card(
+      color: q.quality.allowsLive
+          ? Colors.green.withOpacity(0.08)
+          : Colors.orange.withOpacity(0.06),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(en ? 'QUANT DECISION' : 'تصمیم کوانت',
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text(
+                '${en ? 'Signal' : 'سیگنال'}: ${q.direction}  ·  ${en ? 'Quality' : 'کیفیت'}: ${q.quality.label}'),
+            Text(
+                '${en ? 'Score' : 'امتیاز'}: ${q.score.toStringAsFixed(0)}/100  ·  ${en ? 'Confidence' : 'اعتماد'}: ${q.confidence}%'),
+            Text(
+                '${en ? 'Regime' : 'رژیم'}: ${q.regime.label} (${q.regimeStrategy})'),
+            if (q.entryLow != null && q.entryHigh != null)
+              Text(
+                  'Entry zone: ${q.entryLow!.toStringAsFixed(4)} – ${q.entryHigh!.toStringAsFixed(4)}'),
+            if (q.suggestedSl != null)
+              Text(
+                  'SL ${q.suggestedSl!.toStringAsFixed(4)}  TP1 ${q.suggestedTp1?.toStringAsFixed(4) ?? '-'}'),
+            Text('R/R 1:${q.riskReward.toStringAsFixed(1)}'),
+            Text(q.invalidation),
+            if (q.hardFilterReasons.isNotEmpty)
+              Text('Filters: ${q.hardFilterReasons.join(' · ')}'),
+            const Divider(),
+            Text(en ? 'WHY?' : 'چرا؟',
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            ...q.reasons.take(10).map((r) => Text('• $r')),
+            if (q.breakdown.isNotEmpty)
+              Text(q.breakdown.entries
+                  .map((e) => '${e.key}:${e.value.toStringAsFixed(1)}')
+                  .join(' · ')),
           ],
         ),
       ),
@@ -497,21 +533,15 @@ class _MarketChartPageState extends State<MarketChartPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '${en ? 'Order book' : 'اردربوک'} ($depthSource)',
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
+            Text('${en ? 'Order book' : 'اردربوک'} ($depthSource)',
+                style: const TextStyle(fontWeight: FontWeight.bold)),
             Text(
                 'Bid: ${bidVol.toStringAsFixed(3)}  Ask: ${askVol.toStringAsFixed(3)}'),
             Text(
-              'Imbalance: ${(imb * 100).toStringAsFixed(1)}%  '
-              '${imb > 0.05 ? 'BUY' : (imb < -0.05 ? 'SELL' : 'NEUTRAL')}',
-            ),
+                'Imbalance: ${(imb * 100).toStringAsFixed(1)}%  ${imb > 0.05 ? 'BUY' : (imb < -0.05 ? 'SELL' : 'NEUTRAL')}'),
             if (bestBid != null && bestAsk != null)
               Text(
-                'Best ${bestBid.toStringAsFixed(4)} / ${bestAsk.toStringAsFixed(4)}'
-                '${spread != null ? '  spread ${spread.toStringAsFixed(4)}' : ''}',
-              ),
+                  'Best ${bestBid.toStringAsFixed(4)} / ${bestAsk.toStringAsFixed(4)}${spread != null ? '  spread ${spread.toStringAsFixed(4)}' : ''}'),
           ],
         ),
       ),
@@ -520,9 +550,6 @@ class _MarketChartPageState extends State<MarketChartPage> {
 
   Widget _levelsCard(bool en, MarketSignal s, double px, double? fillPx) {
     final entry = fillPx ?? s.entry;
-    final distEntry = ((px - entry) / entry * 100);
-    final distSl = ((px - s.stopLoss) / entry * 100).abs();
-    final distTp = ((s.tp1 - px) / entry * 100).abs();
     final rsi = ChartIndicators.lastRsi(candles);
     return Card(
       child: Padding(
@@ -533,19 +560,12 @@ class _MarketChartPageState extends State<MarketChartPage> {
             Text(en ? 'Levels' : 'سطوح',
                 style: const TextStyle(fontWeight: FontWeight.bold)),
             Text(
-              '${fillPx != null ? (en ? 'Real fill entry' : 'ورود واقعی') : 'ENTRY'} '
-              '${entry.toStringAsFixed(5)}',
-            ),
+                '${fillPx != null ? (en ? 'Real fill entry' : 'ورود واقعی') : 'ENTRY'} ${entry.toStringAsFixed(5)}'),
             Text('SL ${s.stopLoss.toStringAsFixed(5)}'),
             Text(
-              'TP1 ${s.tp1.toStringAsFixed(5)}  TP2 ${s.tp2.toStringAsFixed(5)}  TP3 ${s.tp3.toStringAsFixed(5)}',
-            ),
+                'TP1 ${s.tp1.toStringAsFixed(5)}  TP2 ${s.tp2.toStringAsFixed(5)}  TP3 ${s.tp3.toStringAsFixed(5)}'),
             Text('R/R 1:${s.riskReward.toStringAsFixed(1)}'),
             if (rsi != null) Text('RSI(14): ${rsi.toStringAsFixed(1)}'),
-            Text(
-              '${en ? 'Dist Entry' : 'فاصله ورود'}: ${distEntry.toStringAsFixed(2)}%  '
-              'SL: ${distSl.toStringAsFixed(2)}%  TP1: ${distTp.toStringAsFixed(2)}%',
-            ),
           ],
         ),
       ),
@@ -559,20 +579,15 @@ class _MarketChartPageState extends State<MarketChartPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(en ? 'AI MARKET ANALYSIS' : 'تحلیل بازار AI',
+            Text(en ? 'BASE MTF ANALYSIS' : 'تحلیل پایه چندتایم',
                 style: const TextStyle(fontWeight: FontWeight.bold)),
             Text('${en ? 'Signal' : 'سیگنال'}: ${a.direction}'),
             Text('${en ? 'Score' : 'امتیاز'}: ${a.score.toStringAsFixed(0)}/100'),
-            Text('${en ? 'Confidence' : 'اعتماد'}: ${a.confidence}%'),
-            Text('${en ? 'Risk' : 'ریسک'}: ${a.riskLevel}'),
             if (a.breakdown.isNotEmpty)
               Text(a.breakdown.entries
                   .map((e) => '${e.key}:${e.value.toStringAsFixed(1)}')
                   .join(' · ')),
-            if (a.missing.isNotEmpty)
-              Text('${en ? 'Missing' : 'ناقص'}: ${a.missing.join(', ')}'),
-            const Divider(),
-            ...a.reasons.take(12).map((r) => Text('• $r')),
+            ...a.reasons.take(8).map((r) => Text('• $r')),
           ],
         ),
       ),
@@ -586,7 +601,6 @@ class _MarketChartPageState extends State<MarketChartPage> {
         title: Text(en ? 'Real SPOT fill' : 'اجرای واقعی اسپات'),
         subtitle: Text(
           'orderId: ${fill['orderId'] ?? fill['order_id'] ?? '-'}\n'
-          'executedQty: ${fill['executedQty'] ?? fill['executed_qty'] ?? '-'}\n'
           'status: ${fill['status'] ?? '-'}',
         ),
       ),
@@ -639,34 +653,29 @@ class _CandlePainter extends CustomPainter {
       maxP = math.max(maxP, lastPrice!);
     }
     final range = (maxP - minP).abs() < 1e-12 ? 1.0 : (maxP - minP);
-
     double yOf(double price) => pad + chartH * (1 - (price - minP) / range);
 
-    final bg = Paint()..color = const Color(0xFF12141C);
-    canvas.drawRect(Offset.zero & size, bg);
+    canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFF12141C));
 
     void level(double price, Color color, String label) {
       final y = yOf(price);
-      final paint = Paint()
-        ..color = color.withOpacity(0.85)
-        ..strokeWidth = 1.2;
-      canvas.drawLine(Offset(pad, y), Offset(size.width - pad, y), paint);
+      canvas.drawLine(
+          Offset(pad, y),
+          Offset(size.width - pad, y),
+          Paint()
+            ..color = color.withOpacity(0.85)
+            ..strokeWidth = 1.2);
       final tp = TextPainter(
         text: TextSpan(
-          text: label,
-          style: TextStyle(
-              color: color, fontSize: 10, fontWeight: FontWeight.w600),
-        ),
+            text: label,
+            style: TextStyle(
+                color: color, fontSize: 10, fontWeight: FontWeight.w600)),
         textDirection: TextDirection.ltr,
       )..layout();
       tp.paint(canvas, Offset(pad + 2, y - 12));
     }
 
     void line(List<double?> series, Color color) {
-      final paint = Paint()
-        ..color = color
-        ..strokeWidth = 1.2
-        ..style = PaintingStyle.stroke;
       final path = Path();
       var started = false;
       final n = candles.length;
@@ -683,7 +692,14 @@ class _CandlePainter extends CustomPainter {
           path.lineTo(x, y);
         }
       }
-      if (started) canvas.drawPath(path, paint);
+      if (started) {
+        canvas.drawPath(
+            path,
+            Paint()
+              ..color = color
+              ..strokeWidth = 1.2
+              ..style = PaintingStyle.stroke);
+      }
     }
 
     if (ema20 != null) line(ema20!, const Color(0xFFFFC107));
@@ -701,14 +717,11 @@ class _CandlePainter extends CustomPainter {
     level(tp1, Colors.greenAccent, 'TP1');
     level(tp2, Colors.green, 'TP2');
     level(tp3, Colors.tealAccent, 'TP3');
-    if (lastPrice != null) {
-      level(lastPrice!, Colors.white70, 'LAST');
-    }
+    if (lastPrice != null) level(lastPrice!, Colors.white70, 'LAST');
 
     final n = candles.length;
     final cw = chartW / n;
     final maxVol = candles.map((c) => c.volume).fold<double>(0, math.max);
-
     for (var i = 0; i < n; i++) {
       final c = candles[i];
       final x = pad + i * cw + cw / 2;
@@ -720,23 +733,19 @@ class _CandlePainter extends CustomPainter {
       final bodyTop = yOf(math.max(c.open, c.close));
       final bodyBot = yOf(math.min(c.open, c.close));
       canvas.drawRect(
-        Rect.fromLTRB(x - cw * 0.3, bodyTop, x + cw * 0.3, bodyBot),
-        paint..style = PaintingStyle.fill,
-      );
-
+          Rect.fromLTRB(x - cw * 0.3, bodyTop, x + cw * 0.3, bodyBot),
+          paint..style = PaintingStyle.fill);
       if (showVolume && maxVol > 0) {
         final vh = (c.volume / maxVol) * volH * 0.9;
-        final vy = size.height - pad - vh;
         canvas.drawRect(
-          Rect.fromLTRB(x - cw * 0.35, vy, x + cw * 0.35, size.height - pad),
-          Paint()
-            ..color =
-                (up ? const Color(0x5526A69A) : const Color(0x55EF5350)),
-        );
+            Rect.fromLTRB(
+                x - cw * 0.35, size.height - pad - vh, x + cw * 0.35, size.height - pad),
+            Paint()
+              ..color =
+                  (up ? const Color(0x5526A69A) : const Color(0x55EF5350)));
       }
     }
 
-    // Crosshair + price/time markers
     if (crosshair != null) {
       final cx = crosshair!.dx.clamp(pad, size.width - pad);
       final cy = crosshair!.dy.clamp(pad, pad + chartH);
@@ -745,7 +754,6 @@ class _CandlePainter extends CustomPainter {
         ..strokeWidth = 1;
       canvas.drawLine(Offset(cx, pad), Offset(cx, pad + chartH), paint);
       canvas.drawLine(Offset(pad, cy), Offset(size.width - pad, cy), paint);
-
       final idx = ((cx - pad) / cw).floor().clamp(0, n - 1);
       final price = maxP - ((cy - pad) / chartH) * range;
       final c = candles[idx];
@@ -753,9 +761,7 @@ class _CandlePainter extends CustomPainter {
           'P ${price.toStringAsFixed(4)}  O${c.open.toStringAsFixed(2)} H${c.high.toStringAsFixed(2)} L${c.low.toStringAsFixed(2)} C${c.close.toStringAsFixed(2)}';
       final tp = TextPainter(
         text: TextSpan(
-          text: label,
-          style: const TextStyle(color: Colors.white, fontSize: 10),
-        ),
+            text: label, style: const TextStyle(color: Colors.white, fontSize: 10)),
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: size.width - 24);
       tp.paint(canvas, Offset(pad, 2));
@@ -765,8 +771,6 @@ class _CandlePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _CandlePainter old) =>
       old.candles != candles ||
-      old.entry != entry ||
-      old.showVolume != showVolume ||
       old.crosshair != crosshair ||
       old.lastPrice != lastPrice;
 }
@@ -790,8 +794,8 @@ class _MacdPainter extends CustomPainter {
     final pad = 8.0;
     final h = size.height - pad * 2;
     final w = size.width - pad * 2;
-    canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFF0E1016));
-
+    canvas.drawRect(
+        Offset.zero & size, Paint()..color = const Color(0xFF0E1016));
     double? minV, maxV;
     for (var i = 0; i < length; i++) {
       final idx = start + i;
@@ -806,12 +810,8 @@ class _MacdPainter extends CustomPainter {
     final range = (maxV - minV).abs() < 1e-12 ? 1.0 : (maxV - minV);
     double yOf(double v) => pad + h * (1 - (v - minV!) / range);
     final zeroY = yOf(0);
-    canvas.drawLine(
-      Offset(pad, zeroY),
-      Offset(size.width - pad, zeroY),
-      Paint()..color = Colors.white24,
-    );
-
+    canvas.drawLine(Offset(pad, zeroY), Offset(size.width - pad, zeroY),
+        Paint()..color = Colors.white24);
     final cw = w / length;
     for (var i = 0; i < length; i++) {
       final idx = start + i;
@@ -820,12 +820,11 @@ class _MacdPainter extends CustomPainter {
       if (hv == null) continue;
       final x = pad + i * cw + cw / 2;
       canvas.drawRect(
-        Rect.fromLTRB(x - cw * 0.3, yOf(hv), x + cw * 0.3, zeroY),
-        Paint()
-          ..color = hv >= 0 ? const Color(0x8826A69A) : const Color(0x88EF5350),
-      );
+          Rect.fromLTRB(x - cw * 0.3, yOf(hv), x + cw * 0.3, zeroY),
+          Paint()
+            ..color =
+                hv >= 0 ? const Color(0x8826A69A) : const Color(0x88EF5350));
     }
-
     void drawSeries(List<double?> s, Color color) {
       final path = Path();
       var started = false;
@@ -845,12 +844,11 @@ class _MacdPainter extends CustomPainter {
       }
       if (started) {
         canvas.drawPath(
-          path,
-          Paint()
-            ..color = color
-            ..strokeWidth = 1.2
-            ..style = PaintingStyle.stroke,
-        );
+            path,
+            Paint()
+              ..color = color
+              ..strokeWidth = 1.2
+              ..style = PaintingStyle.stroke);
       }
     }
 
@@ -859,6 +857,5 @@ class _MacdPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _MacdPainter old) =>
-      old.macd != macd || old.start != start || old.length != length;
+  bool shouldRepaint(covariant _MacdPainter old) => old.macd != macd;
 }
