@@ -19,8 +19,6 @@ import 'trade_settings_page.dart';
 
 const ownerUsername = 'Siavashmorad';
 
-// NOTE: full HomePage body is loaded from baseline + validation patches.
-// This stub will be replaced immediately if incomplete.
 class HomePage extends StatefulWidget {
   final bool english, dark;
   final String? aiUsername, aiPassword;
@@ -42,7 +40,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final api = TabdealApi();
   late final scanner = ScannerService(api);
-  final rules = SymbolRulesService();
+  late final rules = SymbolRulesService(api);
   final sizing = OrderSizingEngine();
   final ai = AiAnalystService();
   final tradeStore = LocalTradeStore();
