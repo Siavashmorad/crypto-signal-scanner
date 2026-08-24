@@ -9,6 +9,7 @@ import '../services/live_trading_gate.dart';
 import '../services/local_trade_store.dart';
 import '../services/order_sizing.dart';
 import '../services/position_tracker.dart';
+import '../services/realtime_futures_scanner_service.dart';
 import '../services/scanner_service.dart';
 import '../services/signal_cooldown.dart';
 import '../services/signal_journal.dart';
@@ -42,7 +43,7 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final api = TabdealApi();
   late final scanner = ScannerService(api);
   late final rules = SymbolRulesService(api);
@@ -52,12 +53,16 @@ class _HomePageState extends State<HomePage> {
   final signalJournal = SignalJournal();
   final signalCooldown = SignalCooldown();
   final liveGate = LiveTradingGate();
+  RealtimeFuturesScannerService? realtime;
   final Map<String, Map<String, dynamic>> lastFills = {};
   bool loading = false;
   bool checkingLink = true;
   bool tabdealLinked = false;
   bool liveOn = false;
   bool preferFutures = false;
+  bool realtimeOn = false;
+  bool realtimeNotify = true;
+  String realtimeLabel = '';
   String timeframe = '15m';
   String? status;
   List<MarketSignal> signals = [];
@@ -77,8 +82,65 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkTabdeal();
     _refreshTradeStatus();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final fg = state == AppLifecycleState.resumed;
+    realtime?.setForeground(fg);
+  }
+
+  Future<void> _syncRealtime(bool enable) async {
+    if (enable) {
+      realtime ??= RealtimeFuturesScannerService(
+        scanner: scanner,
+        journal: signalJournal,
+        onOpportunities: (list) {
+          if (!mounted) return;
+          final mapped = list.map((e) => e.signal).toList();
+          setState(() {
+            signals = mapped;
+            marketCount = mapped.map((e) => e.symbol).toSet().length;
+            final src = scanner.dataSource;
+            status = mapped.isEmpty
+                ? (widget.english
+                    ? 'NO VALID OPPORTUNITY ($src)'
+                    : 'فرصت معتبری نیست ($src)')
+                : (widget.english
+                    ? '${mapped.length} live opportunities'
+                    : '${mapped.length} فرصت زنده');
+          });
+        },
+        onNotify: (opp, body) {
+          if (!mounted || !realtimeNotify) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(body),
+              duration: const Duration(seconds: 6),
+              action: SnackBarAction(
+                label: widget.english ? 'Open' : 'باز کردن',
+                onPressed: () => placeOnPhone(opp.signal, isOpen: true),
+              ),
+            ),
+          );
+        },
+        onState: (s, detail) {
+          if (!mounted) return;
+          setState(() {
+            realtimeLabel =
+                '${realtimeScannerStateLabel(s, english: widget.english)} · $detail';
+          });
+        },
+      );
+      realtime!.timeframe = duration;
+      realtime!.foreground = true;
+      await realtime!.start();
+    } else {
+      realtime?.stop();
+    }
   }
 
   Future<void> _refreshTradeStatus() async {
@@ -86,11 +148,16 @@ class _HomePageState extends State<HomePage> {
     final live = await tradeStore.liveEnabled();
     final p = await SharedPreferences.getInstance();
     final prefer = p.getBool('prefer_futures_execution') ?? false;
+    final rt = p.getBool('realtime_futures_scanner') ?? false;
+    final notify = p.getBool('realtime_notify') ?? true;
     if (!mounted) return;
     setState(() {
       liveOn = live && has;
       preferFutures = prefer;
+      realtimeOn = rt;
+      realtimeNotify = notify;
     });
+    await _syncRealtime(rt);
   }
 
   Future<void> _openDiagnose() async {
@@ -399,7 +466,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// Real Futures path — LONG=BUY, SHORT=SELL via FAPI. Spot path untouched.
   Future<void> _placeFuturesOnPhone(MarketSignal signal) async {
     final en = widget.english;
     final journal = await signalJournal.load();
@@ -572,6 +638,8 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    realtime?.dispose();
     ai.dispose();
     super.dispose();
   }
@@ -668,6 +736,19 @@ class _HomePageState extends State<HomePage> {
                   subtitle: Text(status ?? ''),
                 ),
               ),
+              if (realtimeOn)
+                Card(
+                  color: Colors.blue.withOpacity(0.08),
+                  child: ListTile(
+                    leading: const Icon(Icons.sensors),
+                    title: Text(en
+                        ? 'Real-Time Scanner'
+                        : 'اسکنر لحظه‌ای'),
+                    subtitle: Text(realtimeLabel.isEmpty
+                        ? (en ? 'MONITORING' : 'پایش')
+                        : realtimeLabel),
+                  ),
+                ),
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(12),
@@ -688,8 +769,13 @@ class _HomePageState extends State<HomePage> {
                                   .toList(),
                               onChanged: loading
                                   ? null
-                                  : (v) => setState(
-                                      () => timeframe = v ?? timeframe),
+                                  : (v) {
+                                      setState(
+                                          () => timeframe = v ?? timeframe);
+                                      if (realtime != null) {
+                                        realtime!.timeframe = duration;
+                                      }
+                                    },
                             ),
                           ),
                           const SizedBox(width: 12),
