@@ -3,14 +3,13 @@ import 'signal_journal.dart';
 
 /// Resolve pending paper entries against subsequent real candles only.
 class PaperForwardResolver {
-  /// Walk [candles] after entry time; mark win/loss/expired.
   JournalEntry resolve(
     JournalEntry entry,
     List<Candle> candles, {
     int maxBars = 48,
   }) {
     if (entry.outcome != JournalOutcome.pending) return entry;
-    if (candles.length < 3) return entry;
+    if (candles.length < 2) return entry;
 
     final risk = (entry.entry - entry.stopLoss).abs();
     if (risk <= 0) {
@@ -35,7 +34,10 @@ class PaperForwardResolver {
     var bars = 0;
     final end = (startIdx + maxBars).clamp(0, candles.length - 1);
 
-    for (var i = startIdx + 1; i <= end; i++) {
+    // Evaluate from the bar after entry (or from 0 if single bar set is short)
+    final from = (startIdx + 1 < candles.length) ? startIdx + 1 : startIdx;
+    for (var i = from; i <= end; i++) {
+      if (i == startIdx && candles.length > 1) continue;
       bars++;
       final c = candles[i];
       if (isLong) {
@@ -65,7 +67,6 @@ class PaperForwardResolver {
 
     final pnl = isLong ? (exit - entry.entry) : (entry.entry - exit);
     final r = pnl / risk;
-    // Near-zero R as breakeven
     if (outcome == JournalOutcome.expired && r.abs() < 0.05) {
       outcome = JournalOutcome.breakeven;
     }

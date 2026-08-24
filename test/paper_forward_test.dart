@@ -27,10 +27,12 @@ void main() {
       const Candle(
           timestampMs: 0, open: 100, high: 101, low: 99, close: 100, volume: 1),
       const Candle(
-          timestampMs: 1,
-          open: 100,
+          timestampMs: 1, open: 100, high: 105, low: 99, close: 104, volume: 1),
+      const Candle(
+          timestampMs: 2,
+          open: 104,
           high: 111,
-          low: 100,
+          low: 103,
           close: 110,
           volume: 1),
     ];
@@ -62,7 +64,9 @@ void main() {
       const Candle(
           timestampMs: 0, open: 100, high: 101, low: 99, close: 100, volume: 1),
       const Candle(
-          timestampMs: 1, open: 100, high: 100, low: 94, close: 95, volume: 1),
+          timestampMs: 1, open: 100, high: 100, low: 96, close: 97, volume: 1),
+      const Candle(
+          timestampMs: 2, open: 97, high: 98, low: 94, close: 95, volume: 1),
     ];
     final r = PaperForwardResolver().resolve(entry, candles);
     expect(r.outcome, JournalOutcome.loss);
