@@ -1,4 +1,3 @@
-import '../models/market_data.dart';
 import 'data_health.dart';
 import 'market_regime.dart';
 
@@ -48,7 +47,7 @@ class TradeFilterEngine {
     final reasons = <String>[];
 
     if (dataHealth == DataHealth.stale || dataHealth == DataHealth.offline) {
-      return FilterResult(
+      return const FilterResult(
         verdict: FilterVerdict.noTrade,
         reasons: ['STALE/OFFLINE market data'],
         code: 'STALE_DATA',
@@ -56,7 +55,7 @@ class TradeFilterEngine {
     }
 
     if (minOrderViolatesRisk) {
-      return FilterResult(
+      return const FilterResult(
         verdict: FilterVerdict.noTrade,
         reasons: ['MINIMUM ORDER RISK VIOLATION'],
         code: 'MIN_ORDER_RISK',
@@ -64,7 +63,7 @@ class TradeFilterEngine {
     }
 
     if (insufficientBalance) {
-      return FilterResult(
+      return const FilterResult(
         verdict: FilterVerdict.noTrade,
         reasons: ['INSUFFICIENT BALANCE'],
         code: 'BALANCE',
@@ -149,7 +148,6 @@ class TradeFilterEngine {
     );
   }
 
-  /// Spread in basis points from best bid/ask if available.
   static double? spreadBpsFromDepth(Map<String, dynamic>? depth) {
     if (depth == null) return null;
     final bids = depth['bids'];
