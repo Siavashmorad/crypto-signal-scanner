@@ -13,7 +13,7 @@ import '../services/position_tracker.dart';
 import '../services/realtime_futures_scanner_service.dart';
 import '../services/android_notification_service.dart';
 import '../services/fcm_opportunity_payload.dart';
-import '../services/firebase_push_service.dart';
+import '../main.dart' show appPush;
 import '../services/push_open_handler.dart';
 import '../services/tradingview_signal_service.dart';
 import '../services/scanner_service.dart';
