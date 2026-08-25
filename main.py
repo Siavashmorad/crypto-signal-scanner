@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
 
@@ -199,3 +199,8 @@ def reject_action(request: ActionIdRequest, _: str = Depends(require_owner)) -> 
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"message": "رد شد — سفارشی ارسال نشد", "action": action.to_dict()}
+
+
+from scanner.tv_routes import register_tradingview_routes
+
+register_tradingview_routes(app, require_owner=require_owner)
