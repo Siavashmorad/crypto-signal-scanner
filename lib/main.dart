@@ -121,6 +121,7 @@ class _SignalAppState extends State<SignalApp> {
               dark: dark,
               aiUsername: sessionUsername,
               aiPassword: sessionPassword,
+              pendingPush: pendingFromPush,
               onLang: () => setState(() => english = !english),
               onTheme: () => setState(() => dark = !dark),
               onLogout: _logout,
