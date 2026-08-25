@@ -115,11 +115,13 @@ class SignalNotificationService {
     required double riskReward,
     required String regime,
   }) {
-    return '$symbol FUTURES $side\n'
-        'Quality: $quality  Score: ${score.toStringAsFixed(0)}  '
-        'Conf: ${score.toStringAsFixed(0)}%\n'
+    return 'SignalYab Opportunity\n'
+        '$symbol  $side\n'
         'Entry: $entry  SL: $stopLoss  TP1: $tp1\n'
-        'R/R: 1:${riskReward.toStringAsFixed(1)}  Regime: $regime\n'
-        'No guaranteed profit.';
+        'R:R 1:${riskReward.toStringAsFixed(1)}  '
+        'Score: ${score.toStringAsFixed(0)}  '
+        'Conf: ${score.toStringAsFixed(0)}%\n'
+        'Quality: $quality  Regime: $regime\n'
+        'No auto-trade. No guaranteed profit.';
   }
 }

@@ -53,6 +53,14 @@ class AndroidNotificationService {
       ),
     );
     _ready = true;
+
+    // Cold-start: app launched by tapping a notification while process was dead.
+    try {
+      final launch = await _plugin.getNotificationAppLaunchDetails();
+      if (launch?.didNotificationLaunchApp == true) {
+        onSelect?.call(launch!.notificationResponse?.payload);
+      }
+    } catch (_) {}
   }
 
   Future<void> showOpportunity({

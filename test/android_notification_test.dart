@@ -40,6 +40,8 @@ void main() {
       expect(lower.contains('password'), isFalse);
       expect(body.contains('ETHUSDT'), isTrue);
       expect(body.contains('SHORT'), isTrue);
+      expect(body.contains('Quality'), isTrue);
+      expect(body.contains('A+'), isTrue);
     });
   });
 }
