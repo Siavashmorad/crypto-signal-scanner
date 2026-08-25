@@ -41,7 +41,8 @@ def test_propose_requires_approval_before_position():
 
 
 def test_approve_opens_paper_position():
-    action = service.propose_open(symbol="ETHUSDT", side="SHORT", quantity=0.5, entry=2000.0)
+    # notional = 0.02 * 2000 = 40 USDT (< MAX_POSITION_NOTIONAL_USDT default 50)
+    action = service.propose_open(symbol="ETHUSDT", side="SHORT", quantity=0.02, entry=2000.0)
     done = service.approve(action.id)
     assert done.status == ActionStatus.EXECUTED
     assert done.action == ActionType.OPEN
@@ -52,7 +53,8 @@ def test_approve_opens_paper_position():
 
 
 def test_approve_close_after_open():
-    open_action = service.propose_open(symbol="SOLUSDT", side="LONG", quantity=2.0, entry=150.0)
+    # notional = 0.3 * 150 = 45 USDT (< 50)
+    open_action = service.propose_open(symbol="SOLUSDT", side="LONG", quantity=0.3, entry=150.0)
     service.approve(open_action.id)
     close_action = service.propose_close(symbol="SOLUSDT")
     assert close_action.status == ActionStatus.PENDING
@@ -65,3 +67,9 @@ def test_mode_info_paper():
     info = service.mode_info()
     assert info["mode"] == ExecutionMode.PAPER.value
     assert info["can_propose"] is True
+
+
+def test_risk_rejects_oversized_notional():
+    """Production MAX_POSITION_NOTIONAL_USDT (default 50) must block oversized paper opens."""
+    with pytest.raises(RuntimeError, match="notional"):
+        service.propose_open(symbol="ETHUSDT", side="LONG", quantity=1.0, entry=2000.0)
