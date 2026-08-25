@@ -21,78 +21,12 @@ jobs:
           cache: true
 
       - name: Generate Android platform files
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
           flutter create . --platforms=android --project-name crypto_signal_scanner
           rm -f test/widget_test.dart
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          manifest = Path('android/app/src/main/AndroidManifest.xml')
-          text = manifest.read_text(encoding='utf-8')
-          for perm in [
-              'android.permission.INTERNET',
-              'android.permission.ACCESS_NETWORK_STATE',
-              'android.permission.POST_NOTIFICATIONS',
-              'android.permission.VIBRATE',
-              'android.permission.RECEIVE_BOOT_COMPLETED',
-          ]:
-              if perm not in text:
-                  marker = '<manifest '
-                  start = text.find(marker)
-                  end = text.find('>', start)
-                  text = text[:end + 1] + f'\n    <uses-permission android:name="{perm}" />' + text[end + 1:]
-
-          # Ensure application can use cleartext + network security config
-          if 'android:usesCleartextTraffic' not in text:
-              text = text.replace(
-                  '<application',
-                  '<application android:usesCleartextTraffic="true"',
-                  1,
-              )
-          text, n = re.subn(
-              r'android:label="[^"]*"',
-              'android:label="سیگنال‌یاب"',
-              text,
-              count=1,
-          )
-          if n != 1:
-              raise SystemExit('label not found')
-          manifest.write_text(text, encoding='utf-8')
-
-          # Network security: trust system CAs (default) + cleartext for debug paths
-          res = Path('android/app/src/main/res/xml')
-          res.mkdir(parents=True, exist_ok=True)
-          (res / 'network_security_config.xml').write_text(
-              '''<?xml version="1.0" encoding="utf-8"?>
-          <network-security-config>
-            <base-config cleartextTrafficPermitted="true">
-              <trust-anchors>
-                <certificates src="system" />
-                <certificates src="user" />
-              </trust-anchors>
-            </base-config>
-            <domain-config cleartextTrafficPermitted="true">
-              <domain includeSubdomains="true">tabdeal.org</domain>
-              <domain includeSubdomains="true">api1.tabdeal.org</domain>
-              <domain includeSubdomains="true">api.tabdeal.org</domain>
-              <domain includeSubdomains="true">binance.com</domain>
-            </domain-config>
-          </network-security-config>
-          ''',
-              encoding='utf-8',
-          )
-          # Attach networkSecurityConfig on application if missing
-          m = manifest.read_text(encoding='utf-8')
-          if 'networkSecurityConfig' not in m:
-              m = m.replace(
-                  '<application',
-                  '<application android:networkSecurityConfig="@xml/network_security_config"',
-                  1,
-              )
-              manifest.write_text(m, encoding='utf-8')
-          print('Android network + notification permissions applied')
-          PY
+          python3 scripts/ci_android_setup.py
 
       - name: Get packages
         run: flutter pub get

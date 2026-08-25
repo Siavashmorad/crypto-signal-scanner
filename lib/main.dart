@@ -1,10 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'services/fcm_opportunity_payload.dart';
+import 'services/firebase_push_service.dart';
 import 'widgets/home_page.dart';
 
 const ownerUsername = 'Siavashmorad';
 
-void main() => runApp(const SignalApp());
+/// Global push client (optional Firebase). Never places orders.
+final FirebasePushService appPush = FirebasePushService();
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Best-effort FCM init — fails soft without google-services credentials.
+  try {
+    await appPush.init();
+  } catch (_) {}
+  runApp(const SignalApp());
+}
 
 class SignalApp extends StatefulWidget {
   const SignalApp({super.key});
@@ -16,11 +28,21 @@ class _SignalAppState extends State<SignalApp> {
   bool dark = false, english = false, logged = false, ready = false;
   String? sessionUsername;
   String? sessionPassword;
+  FcmOpportunityPayload? pendingFromPush;
 
   @override
   void initState() {
     super.initState();
     _load();
+    appPush.onOpportunityOpened = (p) {
+      // Queue until Home is ready; never auto-order.
+      pendingFromPush = p;
+      if (mounted) setState(() {});
+    };
+    appPush.opportunityOpened.listen((p) {
+      pendingFromPush = p;
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _load() async {
@@ -34,12 +56,25 @@ class _SignalAppState extends State<SignalApp> {
 
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
+    final backend = prefs.getString('tradingview_backend_url') ?? '';
+    if (backend.isNotEmpty &&
+        sessionUsername != null &&
+        sessionPassword != null) {
+      try {
+        await appPush.disableOnBackend(
+          backendBaseUrl: backend,
+          username: sessionUsername!,
+          password: sessionPassword!,
+        );
+      } catch (_) {}
+    }
     await prefs.setBool('logged', false);
     if (mounted) {
       setState(() {
         logged = false;
         sessionUsername = null;
         sessionPassword = null;
+        pendingFromPush = null;
       });
     }
   }
@@ -50,6 +85,22 @@ class _SignalAppState extends State<SignalApp> {
       sessionPassword = password;
       logged = true;
     });
+    _registerPushIfEnabled(username, password);
+  }
+
+  Future<void> _registerPushIfEnabled(String username, String password) async {
+    final prefs = await SharedPreferences.getInstance();
+    final enabled = prefs.getBool('cloud_fcm_push') ?? true;
+    final backend = prefs.getString('tradingview_backend_url') ?? '';
+    if (!enabled || backend.isEmpty) return;
+    try {
+      await appPush.registerWithBackend(
+        backendBaseUrl: backend,
+        username: username,
+        password: password,
+        enabled: true,
+      );
+    } catch (_) {}
   }
 
   @override
