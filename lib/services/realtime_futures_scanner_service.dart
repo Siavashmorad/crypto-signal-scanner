@@ -50,6 +50,9 @@ class RealtimeOpportunity {
 
 /// Periodic market monitor built on existing [ScannerService].
 /// Does NOT rewrite quant/gate/execution. Uses real Tabdeal trades+depth via scanner.
+///
+/// Background = slower Timer while the Dart isolate is still alive.
+/// Does NOT claim 24/7 when the OS kills the process.
 class RealtimeFuturesScannerService {
   RealtimeFuturesScannerService({
     required this.scanner,
@@ -65,12 +68,8 @@ class RealtimeFuturesScannerService {
   final SignalJournal journal;
   final SignalNotificationService notifications;
 
-  /// Called after each successful cycle with ranked opportunities.
   final void Function(List<RealtimeOpportunity> list)? onOpportunities;
-
-  /// Called when a new A/A+ setup should alert the user (in-app / system).
   final void Function(RealtimeOpportunity opp, String body)? onNotify;
-
   final void Function(RealtimeScannerState state, String detail)? onState;
 
   Timer? _timer;
@@ -80,11 +79,14 @@ class RealtimeFuturesScannerService {
   DateTime? lastSuccess;
   String lastDetail = '';
   List<RealtimeOpportunity> lastOpps = const [];
+  int lastScannedCount = 0;
+  int lastOpportunityCount = 0;
 
-  /// Foreground: faster. Lightweight: slower (battery-aware).
+  /// Foreground: faster. Background (app not visible, process alive): slower.
   Duration intervalForeground = const Duration(seconds: 90);
   Duration intervalBackground = const Duration(minutes: 5);
   bool foreground = true;
+  bool allowBackgroundPolling = true;
   int maxSymbols = 16;
   int maxSignals = 10;
   Duration timeframe = const Duration(minutes: 15);
@@ -131,6 +133,10 @@ class RealtimeFuturesScannerService {
   void _schedule() {
     _timer?.cancel();
     if (!_running) return;
+    if (!foreground && !allowBackgroundPolling) {
+      _setState(RealtimeScannerState.monitoring, 'background polling OFF');
+      return;
+    }
     final d = foreground ? intervalForeground : intervalBackground;
     _timer = Timer.periodic(d, (_) {
       // ignore: discarded_futures
@@ -140,6 +146,7 @@ class RealtimeFuturesScannerService {
 
   Future<void> tick() async {
     if (!_running || _tickBusy) return;
+    if (!foreground && !allowBackgroundPolling) return;
     _tickBusy = true;
     try {
       final list = await scanner.scanAll(
@@ -149,6 +156,7 @@ class RealtimeFuturesScannerService {
         maxSignals: maxSignals,
       );
       lastSuccess = DateTime.now();
+      lastScannedCount = maxSymbols;
       final src = scanner.dataSource;
       final health = src == 'tabdeal'
           ? 'LIVE'
@@ -204,6 +212,7 @@ class RealtimeFuturesScannerService {
       }
 
       lastOpps = opps;
+      lastOpportunityCount = opps.length;
       onOpportunities?.call(opps);
 
       if (src == 'tabdeal') {

@@ -27,6 +27,8 @@ class _AccountPageState extends State<AccountPage> {
   bool realtimeScanner = false;
   bool realtimeNotify = true;
   bool androidOsNotify = true;
+  bool backgroundPolling = true;
+  String notifyMinQuality = 'A';
   bool hasKeys = false;
   String username = '';
   final store = LocalTradeStore();
@@ -58,6 +60,8 @@ class _AccountPageState extends State<AccountPage> {
       realtimeScanner = p.getBool('realtime_futures_scanner') ?? false;
       realtimeNotify = p.getBool('realtime_notify') ?? true;
       androidOsNotify = p.getBool('android_os_notify') ?? true;
+      backgroundPolling = p.getBool('realtime_background_polling') ?? true;
+      notifyMinQuality = p.getString('realtime_notify_min_quality') ?? 'A';
       username = p.getString('signalyab_username') ?? widget.currentUsername;
       _userCtrl.text = username;
     });
@@ -66,6 +70,12 @@ class _AccountPageState extends State<AccountPage> {
   Future<void> _setBool(String key, bool v) async {
     final p = await SharedPreferences.getInstance();
     await p.setBool(key, v);
+    await _load();
+  }
+
+  Future<void> _setString(String key, String v) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(key, v);
     await _load();
   }
 
@@ -83,7 +93,6 @@ class _AccountPageState extends State<AccountPage> {
     ));
   }
 
-  /// Local-only password marker — stored as non-reversible hash, never logged.
   Future<void> _savePassword() async {
     final raw = _passCtrl.text;
     if (raw.length < 4) {
@@ -218,7 +227,7 @@ class _AccountPageState extends State<AccountPage> {
                   ? 'Real-Time Scanner (default OFF)'
                   : 'اسکنر لحظه‌ای (پیش‌فرض خاموش)'),
               subtitle: Text(en
-                  ? 'Auto-scan markets while app process is alive. No fake signals.'
+                  ? 'Auto-scan while app process is alive. No fake signals.'
                   : 'پایش خودکار وقتی فرآیند برنامه زنده است. سیگنال جعلی نمی‌سازد.'),
               value: realtimeScanner,
               onChanged: (v) => _setBool('realtime_futures_scanner', v),
@@ -226,25 +235,53 @@ class _AccountPageState extends State<AccountPage> {
             SwitchListTile(
               title: Text(en ? 'In-app alerts' : 'هشدار داخل برنامه'),
               subtitle: Text(en
-                  ? 'SnackBar for A/A+; fingerprint prevents spam'
-                  : 'SnackBar برای A/A+؛ اثر انگشت جلوی تکرار را می‌گیرد'),
+                  ? 'SnackBar for high quality; fingerprint prevents spam'
+                  : 'SnackBar برای کیفیت بالا؛ اثر انگشت جلوی تکرار را می‌گیرد'),
               value: realtimeNotify,
               onChanged: (v) => _setBool('realtime_notify', v),
             ),
             SwitchListTile(
               title: Text(en ? 'Android OS notification' : 'اعلان Android'),
               subtitle: Text(en
-                  ? 'System tray alert for A/A+. Does not place orders.'
+                  ? 'System tray for A/A+. Does not place orders.'
                   : 'اعلان سیستم برای A/A+. سفارش خودکار نمی‌فرستد.'),
               value: androidOsNotify,
               onChanged: (v) => _setBool('android_os_notify', v),
             ),
+            SwitchListTile(
+              title: Text(en
+                  ? 'Background polling (process alive)'
+                  : 'پایش پس‌زمینه (فرآیند زنده)'),
+              subtitle: Text(en
+                  ? 'Slower scan when app not visible. Stops if OS kills process. NOT 24/7.'
+                  : 'اسکن کندتر وقتی برنامه دیده نمی‌شود. با کشته شدن فرآیند متوقف می‌شود. ۲۴/۷ نیست.'),
+              value: backgroundPolling,
+              onChanged: (v) => _setBool('realtime_background_polling', v),
+            ),
+            ListTile(
+              title: Text(en ? 'Notify min quality' : 'حداقل کیفیت اعلان'),
+              subtitle: Text(en
+                  ? 'A+ only or A and A+'
+                  : 'فقط A+ یا A و A+'),
+              trailing: DropdownButton<String>(
+                value: notifyMinQuality == 'A+' ? 'A+' : 'A',
+                items: const [
+                  DropdownMenuItem(value: 'A+', child: Text('A+')),
+                  DropdownMenuItem(value: 'A', child: Text('A / A+')),
+                ],
+                onChanged: (v) {
+                  if (v != null) {
+                    _setString('realtime_notify_min_quality', v);
+                  }
+                },
+              ),
+            ),
             Text(
               en
-                  ? 'OS background 24/7 is NOT guaranteed when the process is killed. '
-                      'When no valid setup: NO VALID OPPORTUNITY.'
-                  : 'اجرای دائمی پس‌زمینه وقتی فرآیند کشته شود تضمینی نیست. '
-                      'اگر فرصت معتبر نباشد: فرصت معتبری نیست.',
+                  ? 'When the Android process is killed, scanning stops. '
+                      'No guaranteed 24/7. When no valid setup: NO VALID OPPORTUNITY.'
+                  : 'وقتی فرآیند اندروید کشته شود، اسکن متوقف می‌شود. '
+                      '۲۴/۷ تضمینی نیست. اگر فرصت معتبر نباشد: فرصت معتبری نیست.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const Divider(),

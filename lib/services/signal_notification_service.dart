@@ -56,7 +56,7 @@ class SignalNotificationService {
   });
 
   final Duration cooldown;
-  final String minQualityForNotify;
+  String minQualityForNotify;
 
   final Map<String, DateTime> _lastNotified = {};
   final Set<String> _activeFingerprints = {};
@@ -79,7 +79,6 @@ class SignalNotificationService {
 
     final last = _lastNotified[fp.symbol];
     if (last != null && t.difference(last) < cooldown) {
-      // Same symbol still in cooldown unless fingerprint is new setup.
       if (_activeFingerprints.contains(fp.key)) return false;
     }
 
@@ -87,7 +86,6 @@ class SignalNotificationService {
 
     _activeFingerprints.add(fp.key);
     _lastNotified[fp.symbol] = t;
-    // Cap memory
     if (_activeFingerprints.length > 200) {
       _activeFingerprints.clear();
       _activeFingerprints.add(fp.key);
@@ -96,7 +94,8 @@ class SignalNotificationService {
   }
 
   void invalidate(String symbol) {
-    _activeFingerprints.removeWhere((k) => k.startsWith('${symbol.toUpperCase()}:'));
+    _activeFingerprints
+        .removeWhere((k) => k.startsWith('${symbol.toUpperCase()}:'));
   }
 
   void clear() {
@@ -104,6 +103,7 @@ class SignalNotificationService {
     _activeFingerprints.clear();
   }
 
+  /// Safe payload for system tray — never include secrets.
   String buildBody({
     required String symbol,
     required String side,
@@ -116,7 +116,8 @@ class SignalNotificationService {
     required String regime,
   }) {
     return '$symbol FUTURES $side\n'
-        'Quality: $quality  Score: ${score.toStringAsFixed(0)}\n'
+        'Quality: $quality  Score: ${score.toStringAsFixed(0)}  '
+        'Conf: ${score.toStringAsFixed(0)}%\n'
         'Entry: $entry  SL: $stopLoss  TP1: $tp1\n'
         'R/R: 1:${riskReward.toStringAsFixed(1)}  Regime: $regime\n'
         'No guaranteed profit.';
