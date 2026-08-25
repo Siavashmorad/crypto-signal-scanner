@@ -29,6 +29,8 @@ class _AccountPageState extends State<AccountPage> {
   bool androidOsNotify = true;
   bool backgroundPolling = true;
   String notifyMinQuality = 'A';
+  bool tradingViewEnabled = false;
+  String tradingViewBackendUrl = '';
   bool hasKeys = false;
   String username = '';
   final store = LocalTradeStore();
@@ -62,6 +64,8 @@ class _AccountPageState extends State<AccountPage> {
       androidOsNotify = p.getBool('android_os_notify') ?? true;
       backgroundPolling = p.getBool('realtime_background_polling') ?? true;
       notifyMinQuality = p.getString('realtime_notify_min_quality') ?? 'A';
+      tradingViewEnabled = p.getBool('tradingview_enabled') ?? false;
+      tradingViewBackendUrl = p.getString('tradingview_backend_url') ?? '';
       username = p.getString('signalyab_username') ?? widget.currentUsername;
       _userCtrl.text = username;
     });
@@ -282,6 +286,61 @@ class _AccountPageState extends State<AccountPage> {
                       'No guaranteed 24/7. When no valid setup: NO VALID OPPORTUNITY.'
                   : 'وقتی فرآیند اندروید کشته شود، اسکن متوقف می‌شود. '
                       '۲۴/۷ تضمینی نیست. اگر فرصت معتبر نباشد: فرصت معتبری نیست.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            SwitchListTile(
+              title: Text(en
+                  ? 'TradingView alerts (backend)'
+                  : 'هشدار TradingView (بک‌اند)'),
+              subtitle: Text(en
+                  ? 'Poll accepted TV webhooks. Never auto-trades.'
+                  : 'دریافت هشدارهای TV تأییدشده. معامله خودکار نیست.'),
+              value: tradingViewEnabled,
+              onChanged: (v) => _setBool('tradingview_enabled', v),
+            ),
+            ListTile(
+              title: Text(en ? 'Backend URL' : 'آدرس بک‌اند'),
+              subtitle: Text(
+                tradingViewBackendUrl.isEmpty
+                    ? (en
+                        ? 'Set after Render deploy (https://…onrender.com)'
+                        : 'پس از Deploy روی Render تنظیم کنید')
+                    : tradingViewBackendUrl,
+              ),
+              onTap: () async {
+                final ctrl = TextEditingController(text: tradingViewBackendUrl);
+                final ok = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: Text(en ? 'Backend base URL' : 'آدرس پایه بک‌اند'),
+                    content: TextField(
+                      controller: ctrl,
+                      decoration: const InputDecoration(
+                        hintText: 'https://your-service.onrender.com',
+                      ),
+                      keyboardType: TextInputType.url,
+                    ),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: Text(en ? 'Cancel' : 'لغو')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: Text(en ? 'Save' : 'ذخیره')),
+                    ],
+                  ),
+                );
+                if (ok == true) {
+                  await _setString('tradingview_backend_url', ctrl.text.trim());
+                }
+                ctrl.dispose();
+              },
+            ),
+            Text(
+              en
+                  ? 'TradingView webhook secret is only on the server (TRADINGVIEW_WEBHOOK_SECRET). '
+                      'Alerts feed SignalYab validation — never direct orders.'
+                  : 'رمز Webhook فقط روی سرور است. هشدارها فقط ورودی SignalYab هستند — سفارش مستقیم نمی‌زنند.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const Divider(),
