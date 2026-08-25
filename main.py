@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
@@ -12,8 +14,17 @@ from execution import service as execution_service
 from execution import store as execution_store
 from scanner.best_market import best_market
 from scanner.engine import scan_symbol, signal_to_dict
+from scanner.cloud_worker import stop_worker
 
-app = FastAPI(title="SignalYab", version="0.5.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Worker start is env-gated inside register_cloud_routes
+    yield
+    stop_worker()
+
+
+app = FastAPI(title="SignalYab", version="0.6.0", lifespan=lifespan)
 security = HTTPBasic()
 client = TabdealPublicClient()
 
@@ -202,5 +213,7 @@ def reject_action(request: ActionIdRequest, _: str = Depends(require_owner)) -> 
 
 
 from scanner.tv_routes import register_tradingview_routes
+from scanner.cloud_routes import register_cloud_routes
 
 register_tradingview_routes(app, require_owner=require_owner)
+register_cloud_routes(app, require_owner=require_owner)

@@ -30,3 +30,18 @@ services:
         value: "30"
       - key: TRADINGVIEW_WEBHOOK_SECRET
         sync: false
+      # Cloud Market Worker (independent of Flutter process). Default off until
+      # you explicitly enable after deploy. Free tier may sleep after idle.
+      - key: CLOUD_WORKER_ENABLED
+        value: "false"
+      - key: CLOUD_WORKER_INTERVAL_SEC
+        value: "90"
+      - key: CLOUD_WORKER_MAX_SYMBOLS
+        value: "16"
+      - key: CLOUD_WORKER_TIMEFRAME
+        value: "15m"
+      - key: CLOUD_WORKER_MIN_SCORE
+        value: "70"
+      # Optional FCM — leave unset until credentials available
+      - key: FCM_SERVER_KEY
+        sync: false
