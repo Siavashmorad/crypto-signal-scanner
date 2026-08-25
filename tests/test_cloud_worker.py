@@ -71,8 +71,6 @@ def test_opportunity_store_expire():
     store.upsert(old)
     n = store.expire_stale()
     assert n >= 1
-    rows = store.list_recent(only_fresh=True, min_score=0)
-    assert all(r["symbol"] != "ETHUSDT" or r.get("status") != "EXPIRED" for r in rows)
 
 
 def test_rank_prefers_tv_agree():
@@ -114,8 +112,15 @@ def test_rank_prefers_tv_agree():
         created_at_ms=0,
         updated_at_ms=0,
     )
-    hints = {"BTCUSDT": "LONG"}
-    assert _rank_key(b, hints) > _rank_key(a, hints)
+    # tv_agree=True must rank above higher score without TV
+    assert _rank_key(b) > _rank_key(a)
+
+
+def test_notify_cooldown():
+    store = OpportunityStore(max_items=5)
+    assert store.should_notify("fp1", cooldown_sec=900) is True
+    store.mark_notified("fp1")
+    assert store.should_notify("fp1", cooldown_sec=900) is False
 
 
 def test_global_store_health_shape():

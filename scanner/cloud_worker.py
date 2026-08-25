@@ -14,12 +14,12 @@ import logging
 import os
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from data.tabdeal import TabdealPublicClient
 from scanner.best_market import extract_symbols
-from scanner.engine import scan_symbol, signal_to_dict
+from scanner.engine import scan_symbol
 from scanner.tradingview_webhook import alert_store
 
 logger = logging.getLogger("signalyab.cloud_worker")
@@ -32,6 +32,7 @@ DEFAULT_RISK_PCT = float(os.getenv("CLOUD_WORKER_RISK_PERCENT", "1.0"))
 MIN_SCORE = float(os.getenv("CLOUD_WORKER_MIN_SCORE", "70"))
 MAX_OPPORTUNITIES = 100
 DEFAULT_MAX_AGE_SEC = 15 * 60
+NOTIFY_COOLDOWN_SEC = int(os.getenv("CLOUD_NOTIFY_COOLDOWN_SEC", "900"))
 
 PRIORITY_SYMBOLS = (
     "BTCUSDT",
@@ -59,7 +60,7 @@ class CloudOpportunity:
     score: float
     confidence: float
     regime: str
-    data_health: str  # LIVE | DEGRADED | STALE
+    data_health: str  # LIVE | DEGRADED | STALE | INSUFFICIENT_DATA
     reasons: list[str]
     source: str  # scanner | scanner+tv
     tv_agree: bool
@@ -67,6 +68,8 @@ class CloudOpportunity:
     status: str  # NEW | VALIDATED | NOTIFIED | EXPIRED | REJECTED
     created_at_ms: int
     updated_at_ms: int
+    notified_at_ms: int = 0
+    higher_tf: str = ""  # e.g. 1h alignment note when available
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -95,6 +98,7 @@ class OpportunityStore:
         self._items: list[CloudOpportunity] = []
         self._fps: set[str] = set()
         self._max = max_items
+        self._notified_fp: dict[str, int] = {}  # fingerprint -> notified_at_ms
         self.last_scan_at_ms: int = 0
         self.last_scan_detail: str = ""
         self.last_scanned_count: int = 0
@@ -144,6 +148,27 @@ class OpportunityStore:
                 break
         return out
 
+    def top(self, *, min_score: float = MIN_SCORE) -> dict[str, Any] | None:
+        rows = self.list_recent(limit=1, only_fresh=True, min_score=min_score)
+        return rows[0] if rows else None
+
+    def should_notify(self, fingerprint: str, cooldown_sec: int = NOTIFY_COOLDOWN_SEC) -> bool:
+        now = _now_ms()
+        with self._lock:
+            last = self._notified_fp.get(fingerprint, 0)
+            if last and (now - last) < cooldown_sec * 1000:
+                return False
+            return True
+
+    def mark_notified(self, fingerprint: str) -> None:
+        with self._lock:
+            self._notified_fp[fingerprint] = _now_ms()
+            for o in self._items:
+                if o.fingerprint == fingerprint:
+                    o.status = "NOTIFIED"
+                    o.notified_at_ms = self._notified_fp[fingerprint]
+                    o.updated_at_ms = o.notified_at_ms
+
     def expire_stale(self) -> int:
         now = _now_ms()
         n = 0
@@ -157,7 +182,16 @@ class OpportunityStore:
 
     def health(self) -> dict[str, Any]:
         with self._lock:
-            fresh = sum(1 for o in self._items if not o.is_stale() and o.status not in ("EXPIRED", "REJECTED"))
+            fresh = sum(
+                1
+                for o in self._items
+                if not o.is_stale() and o.status not in ("EXPIRED", "REJECTED")
+            )
+            top_sym = None
+            for o in reversed(self._items):
+                if not o.is_stale() and o.status not in ("EXPIRED", "REJECTED"):
+                    top_sym = f"{o.symbol} {o.side} score={o.score}"
+                    break
         return {
             "worker_running": self.worker_running,
             "last_scan_at_ms": self.last_scan_at_ms,
@@ -165,8 +199,11 @@ class OpportunityStore:
             "last_scanned_count": self.last_scanned_count,
             "last_opportunity_count": self.last_opportunity_count,
             "fresh_opportunities": fresh,
+            "top_opportunity": top_sym,
             "orders_from_worker": False,
-            "push_configured": bool(os.getenv("FCM_SERVER_KEY") or os.getenv("FIREBASE_CREDENTIALS_JSON")),
+            "push_configured": bool(
+                os.getenv("FCM_SERVER_KEY") or os.getenv("FIREBASE_CREDENTIALS_JSON")
+            ),
         }
 
 
@@ -189,21 +226,34 @@ def _tv_hints() -> dict[str, str]:
 
 
 def _fingerprint(symbol: str, side: str, timeframe: str, entry: float) -> str:
-    bucket = int(entry * 100) // 10  # coarse price bucket
+    bucket = int(entry * 100) // 10
     src = f"{symbol}:{side}:{timeframe}:{bucket}:{_now_ms() // 60000}"
     return hashlib.sha256(src.encode()).hexdigest()[:16]
 
 
-def _rank_key(opp: CloudOpportunity, hints: dict[str, str]) -> tuple:
-    tv_bonus = 2 if hints.get(opp.symbol.upper()) == opp.side.upper() else 0
+def _rank_key(opp: CloudOpportunity, hints: dict[str, str] | None = None) -> tuple:
+    """Higher tuple sorts first. TV-agree elevates even if score slightly lower."""
+    tv_bonus = 2 if opp.tv_agree else 0
+    if not opp.tv_agree and hints:
+        # secondary: live hint match without prior flag (should be rare)
+        if hints.get(opp.symbol.upper()) == opp.side.upper():
+            tv_bonus = 1
     return (tv_bonus, opp.score, opp.confidence)
 
 
 def build_universe(client: TabdealPublicClient, max_symbols: int = DEFAULT_MAX_SYMBOLS) -> list[str]:
-    """Dynamic futures/spot universe from exchangeInfo; prefer priority symbols."""
+    """Dynamic universe from exchangeInfo; prefer priority symbols."""
     symbols: list[str] = []
     try:
-        info = client.exchange_info()
+        # Prefer FAPI path when host supports it (optional method)
+        info = None
+        if hasattr(client, "_get"):
+            try:
+                info = client._get("/r/fapi/v1/exchangeInfo")  # type: ignore[attr-defined]
+            except Exception:
+                info = None
+        if not info:
+            info = client.exchange_info()
         symbols = extract_symbols(info, quote_asset="USDT")
     except Exception as exc:
         logger.warning("exchangeInfo failed: %s — using priority fallback", exc)
@@ -221,6 +271,21 @@ def build_universe(client: TabdealPublicClient, max_symbols: int = DEFAULT_MAX_S
     return ordered[:max_symbols]
 
 
+def _optional_higher_tf_note(
+    client: TabdealPublicClient, symbol: str, side: str, capital: float, risk_percent: float
+) -> str:
+    """Best-effort 1h confirmation using existing scan_symbol. No invented candles."""
+    try:
+        sig = scan_symbol(client, symbol, "1h", capital, risk_percent)
+        if sig.direction == "NO_TRADE":
+            return "1h:INSUFFICIENT_OR_NO_SETUP"
+        if sig.direction.upper() == side.upper():
+            return f"1h:ALIGN score={sig.score}"
+        return f"1h:CONFLICT {sig.direction}"
+    except Exception:
+        return "1h:UNAVAILABLE"
+
+
 def run_scan_once(
     client: TabdealPublicClient | None = None,
     *,
@@ -230,7 +295,7 @@ def run_scan_once(
     max_symbols: int = DEFAULT_MAX_SYMBOLS,
     min_score: float = MIN_SCORE,
 ) -> dict[str, Any]:
-    """One scan cycle. Reuses existing scan_symbol. Never invents data."""
+    """One scan cycle. Reuses existing scan_symbol. Never invents data. Never orders."""
     client = client or TabdealPublicClient()
     hints = _tv_hints()
     opportunity_store.expire_stale()
@@ -248,8 +313,19 @@ def run_scan_once(
             side = signal.direction.upper()
             if side not in ("LONG", "SHORT"):
                 continue
-            tv_agree = hints.get(symbol.upper()) == side
-            conf = min(99.0, max(0.0, float(signal.score)))
+
+            # TV agreement: only elevate if same side; conflict = skip high-confidence notify path
+            hint_side = hints.get(symbol.upper())
+            tv_agree = hint_side == side
+            if hint_side and hint_side != side:
+                # Downgrade: keep for ranking but mark conflict in reasons
+                conf = min(70.0, float(signal.score) * 0.85)
+                reasons = list(signal.reasons) if signal.reasons else []
+                reasons.append(f"TV conflict:{hint_side}")
+            else:
+                conf = min(99.0, max(0.0, float(signal.score)))
+                reasons = list(signal.reasons) if signal.reasons else []
+
             regime = "UNKNOWN"
             if signal.score >= 80 and side == "LONG":
                 regime = "TRENDING_BULL"
@@ -257,6 +333,14 @@ def run_scan_once(
                 regime = "TRENDING_BEAR"
             elif signal.score < 75:
                 regime = "RANGING"
+
+            higher = _optional_higher_tf_note(client, symbol, side, capital, risk_percent)
+            if "CONFLICT" in higher:
+                conf = min(conf, conf * 0.9)
+                reasons.append(higher)
+            elif "ALIGN" in higher:
+                reasons.append(higher)
+                conf = min(99.0, conf + 2)
 
             tps = list(signal.take_profit) if signal.take_profit else []
             now = _now_ms()
@@ -271,13 +355,14 @@ def run_scan_once(
                 confidence=conf,
                 regime=regime,
                 data_health="LIVE",
-                reasons=list(signal.reasons) if signal.reasons else [],
+                reasons=reasons,
                 source="scanner+tv" if tv_agree else "scanner",
                 tv_agree=tv_agree,
                 fingerprint=_fingerprint(symbol, side, timeframe, float(signal.entry)),
                 status="VALIDATED",
                 created_at_ms=now,
                 updated_at_ms=now,
+                higher_tf=higher,
             )
             found.append(opp)
         except Exception as exc:
@@ -316,7 +401,7 @@ def run_scan_once(
 
 
 class MarketWorker:
-    """Background loop. Stops cleanly. No orders."""
+    """Background loop. Stops cleanly. No orders. No direct Tabdeal private calls."""
 
     def __init__(
         self,
@@ -333,7 +418,9 @@ class MarketWorker:
             return
         self._stop.clear()
         opportunity_store.worker_running = True
-        self._thread = threading.Thread(target=self._loop, name="signalyab-cloud-worker", daemon=True)
+        self._thread = threading.Thread(
+            target=self._loop, name="signalyab-cloud-worker", daemon=True
+        )
         self._thread.start()
         logger.info("MarketWorker started interval=%ss", self.interval_sec)
 
@@ -361,9 +448,16 @@ _worker: MarketWorker | None = None
 def start_worker_if_enabled() -> bool:
     """Start only when CLOUD_WORKER_ENABLED=true."""
     global _worker
-    enabled = os.getenv("CLOUD_WORKER_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+    enabled = os.getenv("CLOUD_WORKER_ENABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
     if not enabled:
-        logger.info("CLOUD_WORKER_ENABLED not set — worker not started (Flutter poll remains available)")
+        logger.info(
+            "CLOUD_WORKER_ENABLED not set — worker not started (Flutter poll remains available)"
+        )
         return False
     if _worker is None:
         _worker = MarketWorker()
