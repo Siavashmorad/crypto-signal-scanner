@@ -33,6 +33,9 @@ jobs:
           for perm in [
               'android.permission.INTERNET',
               'android.permission.ACCESS_NETWORK_STATE',
+              'android.permission.POST_NOTIFICATIONS',
+              'android.permission.VIBRATE',
+              'android.permission.RECEIVE_BOOT_COMPLETED',
           ]:
               if perm not in text:
                   marker = '<manifest '
@@ -88,7 +91,7 @@ jobs:
                   1,
               )
               manifest.write_text(m, encoding='utf-8')
-          print('Android network permissions + security config applied')
+          print('Android network + notification permissions applied')
           PY
 
       - name: Get packages
