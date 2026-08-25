@@ -5,6 +5,7 @@ Does NOT invent indicators or market data.
 Does NOT place orders. TV alerts are hints only.
 
 Enable with env CLOUD_WORKER_ENABLED=true (default false on free-tier safety).
+FCM push is optional and requires FCM_SERVER_KEY (never committed).
 """
 
 from __future__ import annotations
@@ -31,8 +32,13 @@ DEFAULT_CAPITAL = float(os.getenv("CLOUD_WORKER_CAPITAL", "1000"))
 DEFAULT_RISK_PCT = float(os.getenv("CLOUD_WORKER_RISK_PERCENT", "1.0"))
 MIN_SCORE = float(os.getenv("CLOUD_WORKER_MIN_SCORE", "70"))
 MAX_OPPORTUNITIES = 100
-DEFAULT_MAX_AGE_SEC = 15 * 60
-NOTIFY_COOLDOWN_SEC = int(os.getenv("CLOUD_NOTIFY_COOLDOWN_SEC", "900"))
+DEFAULT_MAX_AGE_SEC = int(os.getenv("CLOUD_WORKER_OPPORTUNITY_TTL_SECONDS", str(15 * 60)))
+NOTIFY_COOLDOWN_SEC = int(
+    os.getenv(
+        "CLOUD_WORKER_NOTIFICATION_COOLDOWN_SECONDS",
+        os.getenv("CLOUD_NOTIFY_COOLDOWN_SEC", "900"),
+    )
+)
 
 PRIORITY_SYMBOLS = (
     "BTCUSDT",
@@ -100,10 +106,14 @@ class OpportunityStore:
         self._max = max_items
         self._notified_fp: dict[str, int] = {}  # fingerprint -> notified_at_ms
         self.last_scan_at_ms: int = 0
+        self.last_success_at_ms: int = 0
         self.last_scan_detail: str = ""
+        self.last_error: str = ""
         self.last_scanned_count: int = 0
         self.last_opportunity_count: int = 0
+        self.notifications_sent: int = 0
         self.worker_running: bool = False
+        self.started_at_ms: int = 0
 
     def upsert(self, opp: CloudOpportunity) -> tuple[bool, str]:
         with self._lock:
@@ -181,6 +191,7 @@ class OpportunityStore:
         return n
 
     def health(self) -> dict[str, Any]:
+        now = _now_ms()
         with self._lock:
             fresh = sum(
                 1
@@ -192,14 +203,24 @@ class OpportunityStore:
                 if not o.is_stale() and o.status not in ("EXPIRED", "REJECTED"):
                     top_sym = f"{o.symbol} {o.side} score={o.score}"
                     break
+            uptime_sec = (
+                int((now - self.started_at_ms) / 1000) if self.started_at_ms else 0
+            )
         return {
             "worker_running": self.worker_running,
+            "last_scan_at": self.last_scan_at_ms,
             "last_scan_at_ms": self.last_scan_at_ms,
+            "last_success_at_ms": self.last_success_at_ms,
             "last_scan_detail": self.last_scan_detail,
+            "last_error": self.last_error,
             "last_scanned_count": self.last_scanned_count,
+            "symbols_scanned": self.last_scanned_count,
             "last_opportunity_count": self.last_opportunity_count,
+            "opportunities_found": self.last_opportunity_count,
             "fresh_opportunities": fresh,
+            "notifications_sent": self.notifications_sent,
             "top_opportunity": top_sym,
+            "uptime_seconds": uptime_sec,
             "orders_from_worker": False,
             "push_configured": bool(
                 os.getenv("FCM_SERVER_KEY") or os.getenv("FIREBASE_CREDENTIALS_JSON")
@@ -235,7 +256,6 @@ def _rank_key(opp: CloudOpportunity, hints: dict[str, str] | None = None) -> tup
     """Higher tuple sorts first. TV-agree elevates even if score slightly lower."""
     tv_bonus = 2 if opp.tv_agree else 0
     if not opp.tv_agree and hints:
-        # secondary: live hint match without prior flag (should be rare)
         if hints.get(opp.symbol.upper()) == opp.side.upper():
             tv_bonus = 1
     return (tv_bonus, opp.score, opp.confidence)
@@ -245,7 +265,6 @@ def build_universe(client: TabdealPublicClient, max_symbols: int = DEFAULT_MAX_S
     """Dynamic universe from exchangeInfo; prefer priority symbols."""
     symbols: list[str] = []
     try:
-        # Prefer FAPI path when host supports it (optional method)
         info = None
         if hasattr(client, "_get"):
             try:
@@ -286,6 +305,23 @@ def _optional_higher_tf_note(
         return "1h:UNAVAILABLE"
 
 
+def _try_notify(opp: CloudOpportunity) -> None:
+    """Best-effort FCM. Never raises into scan loop. Never places orders."""
+    if opp.score < MIN_SCORE:
+        return
+    if not opportunity_store.should_notify(opp.fingerprint):
+        return
+    try:
+        from scanner.fcm_dispatcher import dispatch_opportunity
+
+        result = dispatch_opportunity(opp)
+        if result.get("sent", 0) > 0:
+            opportunity_store.mark_notified(opp.fingerprint)
+            opportunity_store.notifications_sent += int(result["sent"])
+    except Exception as exc:
+        logger.debug("notify failed: %s", exc)
+
+
 def run_scan_once(
     client: TabdealPublicClient | None = None,
     *,
@@ -314,11 +350,9 @@ def run_scan_once(
             if side not in ("LONG", "SHORT"):
                 continue
 
-            # TV agreement: only elevate if same side; conflict = skip high-confidence notify path
             hint_side = hints.get(symbol.upper())
             tv_agree = hint_side == side
             if hint_side and hint_side != side:
-                # Downgrade: keep for ranking but mark conflict in reasons
                 conf = min(70.0, float(signal.score) * 0.85)
                 reasons = list(signal.reasons) if signal.reasons else []
                 reasons.append(f"TV conflict:{hint_side}")
@@ -341,6 +375,8 @@ def run_scan_once(
             elif "ALIGN" in higher:
                 reasons.append(higher)
                 conf = min(99.0, conf + 2)
+            elif "UNAVAILABLE" in higher or "INSUFFICIENT" in higher:
+                reasons.append(higher)
 
             tps = list(signal.take_profit) if signal.take_profit else []
             now = _now_ms()
@@ -377,13 +413,22 @@ def run_scan_once(
         if ok:
             accepted += 1
 
+    notified = 0
+    for opp in found[:3]:
+        before = opportunity_store.notifications_sent
+        _try_notify(opp)
+        if opportunity_store.notifications_sent > before:
+            notified += 1
+
     now = _now_ms()
     opportunity_store.last_scan_at_ms = now
+    opportunity_store.last_success_at_ms = now
+    opportunity_store.last_error = ""
     opportunity_store.last_scanned_count = len(universe)
     opportunity_store.last_opportunity_count = accepted
     detail = (
         f"scanned={len(universe)} found={len(found)} accepted={accepted} "
-        f"errors={errors} tv_hints={len(hints)}"
+        f"errors={errors} tv_hints={len(hints)} notified={notified}"
     )
     if accepted == 0:
         detail += " | NO VALID OPPORTUNITY"
@@ -395,6 +440,7 @@ def run_scan_once(
         "accepted": accepted,
         "errors": errors,
         "tv_hints": len(hints),
+        "notified": notified,
         "detail": detail,
         "top": [o.to_dict() for o in found[:5]],
     }
@@ -418,6 +464,8 @@ class MarketWorker:
             return
         self._stop.clear()
         opportunity_store.worker_running = True
+        if not opportunity_store.started_at_ms:
+            opportunity_store.started_at_ms = _now_ms()
         self._thread = threading.Thread(
             target=self._loop, name="signalyab-cloud-worker", daemon=True
         )
@@ -438,6 +486,7 @@ class MarketWorker:
                 run_scan_once(self.client)
             except Exception as exc:
                 opportunity_store.last_scan_detail = f"scan error: {exc}"
+                opportunity_store.last_error = str(exc)
                 logger.exception("cloud worker scan failed")
             self._stop.wait(self.interval_sec)
 
