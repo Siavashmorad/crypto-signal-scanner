@@ -9,6 +9,8 @@ from scanner.cloud_worker import (
     _rank_key,
     opportunity_store,
 )
+from scanner.device_registry import DeviceRegistry
+from scanner.fcm_dispatcher import build_payload, is_configured
 
 
 def test_fingerprint_stable_shape():
@@ -126,4 +128,70 @@ def test_notify_cooldown():
 def test_global_store_health_shape():
     h = opportunity_store.health()
     assert "worker_running" in h
+    assert h["orders_from_worker"] is False
+    assert "notifications_sent" in h
+    assert "last_success_at_ms" in h
+
+
+def test_device_registry_register_and_disable():
+    reg = DeviceRegistry()
+    rec = reg.register(
+        device_id="dev-1",
+        fcm_token="x" * 40,
+        platform="android",
+        enabled=True,
+    )
+    assert rec.device_id == "dev-1"
+    assert len(reg.enabled_tokens()) == 1
+    assert reg.disable("dev-1") is True
+    assert len(reg.enabled_tokens()) == 0
+    assert reg.remove("dev-1") is True
+
+
+def test_device_registry_token_rotation():
+    reg = DeviceRegistry()
+    reg.register(device_id="dev-a", fcm_token="token_aaaaaaaaaaaaaaaaaaaa", platform="android")
+    reg.register(device_id="dev-a", fcm_token="token_bbbbbbbbbbbbbbbbbbbb", platform="android")
+    tokens = reg.enabled_tokens()
+    assert len(tokens) == 1
+    assert tokens[0].startswith("token_b")
+
+
+def test_fcm_payload_shape():
+    opp = CloudOpportunity(
+        symbol="BTCUSDT",
+        side="LONG",
+        timeframe="15m",
+        entry=65000.0,
+        stop_loss=64000.0,
+        take_profit=[67000.0],
+        score=88.0,
+        confidence=90.0,
+        regime="TRENDING_BULL",
+        data_health="LIVE",
+        reasons=[],
+        source="scanner",
+        tv_agree=False,
+        fingerprint="fpdeadbeef012345",
+        status="VALIDATED",
+        created_at_ms=1,
+        updated_at_ms=1,
+    )
+    p = build_payload(opp)
+    assert "notification" in p
+    assert "data" in p
+    assert p["data"]["symbol"] == "BTCUSDT"
+    assert p["data"]["side"] == "LONG"
+    assert "deep_link" in p["data"]
+    assert "signalyab://" in p["data"]["deep_link"]
+
+
+def test_fcm_not_configured_without_env(monkeypatch):
+    monkeypatch.delenv("FCM_SERVER_KEY", raising=False)
+    monkeypatch.delenv("FIREBASE_CREDENTIALS_JSON", raising=False)
+    assert is_configured() is False
+
+
+def test_cloud_cannot_place_orders_constant():
+    h = opportunity_store.health()
     assert h["orders_from_worker"] is False

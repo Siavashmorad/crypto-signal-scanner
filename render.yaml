@@ -42,6 +42,10 @@ services:
         value: "15m"
       - key: CLOUD_WORKER_MIN_SCORE
         value: "70"
-      # Optional FCM — leave unset until credentials available
+      - key: CLOUD_WORKER_OPPORTUNITY_TTL_SECONDS
+        value: "900"
+      - key: CLOUD_WORKER_NOTIFICATION_COOLDOWN_SECONDS
+        value: "900"
+      # Optional FCM — leave unset until credentials available (never commit secrets)
       - key: FCM_SERVER_KEY
         sync: false
