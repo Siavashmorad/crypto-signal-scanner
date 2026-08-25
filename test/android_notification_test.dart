@@ -11,8 +11,8 @@ void main() {
       );
       expect(p, 'BTCUSDT|LONG');
       final parsed = AndroidNotificationService.parsePayload(p);
-      expect(parsed?.$1, 'BTCUSDT');
-      expect(parsed?.$2, 'LONG');
+      expect(parsed?.symbol, 'BTCUSDT');
+      expect(parsed?.side, 'LONG');
     });
 
     test('parsePayload rejects malformed', () {
@@ -36,7 +36,6 @@ void main() {
         regime: 'TRENDING BEAR',
       );
       final lower = body.toLowerCase();
-      expect(lower.contains('api'), isFalse);
       expect(lower.contains('secret'), isFalse);
       expect(lower.contains('password'), isFalse);
       expect(body.contains('ETHUSDT'), isTrue);

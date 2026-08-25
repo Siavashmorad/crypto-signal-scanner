@@ -1,6 +1,12 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-/// Real Android (and iOS-capable) local notifications for SignalYab opportunities.
+class NotificationPayload {
+  final String symbol;
+  final String side;
+  const NotificationPayload({required this.symbol, required this.side});
+}
+
+/// Real Android local notifications for SignalYab opportunities.
 /// Does NOT place orders. Does NOT include API secrets.
 class AndroidNotificationService {
   AndroidNotificationService({
@@ -49,7 +55,6 @@ class AndroidNotificationService {
     _ready = true;
   }
 
-  /// Show a system notification. [payload] is opaque (e.g. SYMBOL|SIDE).
   Future<void> showOpportunity({
     required int id,
     required String title,
@@ -79,10 +84,10 @@ class AndroidNotificationService {
   static String payloadFor({required String symbol, required String side}) =>
       '${symbol.toUpperCase()}|${side.toUpperCase()}';
 
-  static (String symbol, String side)? parsePayload(String? payload) {
+  static NotificationPayload? parsePayload(String? payload) {
     if (payload == null || !payload.contains('|')) return null;
     final parts = payload.split('|');
     if (parts.length < 2) return null;
-    return (parts[0], parts[1]);
+    return NotificationPayload(symbol: parts[0], side: parts[1]);
   }
 }
