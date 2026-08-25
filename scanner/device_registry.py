@@ -22,10 +22,10 @@ class DeviceRecord:
     platform: str  # android | ios
     enabled: bool
     updated_at_ms: int
+    app_version: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
-        # never expose full token in list APIs beyond last 8 chars
         tok = self.fcm_token or ""
         d["fcm_token_tail"] = tok[-8:] if len(tok) >= 8 else "***"
         del d["fcm_token"]
@@ -45,15 +45,16 @@ class DeviceRegistry:
         fcm_token: str,
         platform: str = "android",
         enabled: bool = True,
+        app_version: str = "",
     ) -> DeviceRecord:
         device_id = (device_id or "").strip()[:128]
         fcm_token = (fcm_token or "").strip()
         platform = (platform or "android").strip().lower()[:16]
+        app_version = (app_version or "").strip()[:32]
         if not device_id or not fcm_token or len(fcm_token) < 20:
             raise ValueError("device_id and valid fcm_token required")
         now = _now_ms()
         with self._lock:
-            # drop previous owner of this token
             old_id = self._by_token.get(fcm_token)
             if old_id and old_id != device_id and old_id in self._by_id:
                 prev = self._by_id[old_id]
@@ -65,6 +66,7 @@ class DeviceRegistry:
                 platform=platform,
                 enabled=bool(enabled),
                 updated_at_ms=now,
+                app_version=app_version,
             )
             self._by_id[device_id] = rec
             self._by_token[fcm_token] = device_id

@@ -55,17 +55,19 @@ def build_payload(opp: CloudOpportunity) -> dict[str, Any]:
         body_parts.append(opp.regime)
     body = " | ".join(body_parts)
     data = {
-        "type": "opportunity",
+        "type": "signal_opportunity",
         "opportunity_id": opp.fingerprint,
         "symbol": opp.symbol,
         "side": opp.side,
         "entry": str(opp.entry),
         "stop_loss": str(opp.stop_loss),
         "tp1": str(opp.take_profit[0]) if opp.take_profit else "",
+        "risk_reward": str(rr) if rr is not None else "",
         "score": str(opp.score),
         "confidence": str(opp.confidence),
         "regime": opp.regime or "",
         "timestamp_ms": str(opp.updated_at_ms),
+        "timestamp": str(opp.updated_at_ms),
         "source": opp.source,
         "deep_link": f"signalyab://opportunity/{opp.symbol}/{opp.side}/{opp.fingerprint}",
     }
@@ -75,6 +77,7 @@ def build_payload(opp: CloudOpportunity) -> dict[str, Any]:
             "body": body,
             "sound": "default",
             "click_action": "FLUTTER_NOTIFICATION_CLICK",
+            "android_channel_id": "signalyab_futures_opportunities",
         },
         "data": data,
         "priority": "high",

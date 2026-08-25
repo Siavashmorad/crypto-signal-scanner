@@ -26,6 +26,7 @@ class DeviceRegisterRequest(BaseModel):
     fcm_token: str = Field(min_length=20, max_length=4096)
     platform: str = Field(default="android", max_length=16)
     enabled: bool = True
+    app_version: str = Field(default="", max_length=32)
 
 
 class DeviceIdRequest(BaseModel):
@@ -94,6 +95,7 @@ def register_cloud_routes(app, *, require_owner):
                 fcm_token=body.fcm_token,
                 platform=body.platform,
                 enabled=body.enabled,
+                app_version=body.app_version,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -126,5 +128,4 @@ def register_cloud_routes(app, *, require_owner):
         rows = device_registry.list_devices()
         return {"devices": rows, "count": len(rows)}
 
-    # Start background worker once routes are registered (env-gated)
     start_worker_if_enabled()
