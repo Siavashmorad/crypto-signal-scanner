@@ -26,6 +26,7 @@ class _AccountPageState extends State<AccountPage> {
   bool preferFutures = false;
   bool realtimeScanner = false;
   bool realtimeNotify = true;
+  bool androidOsNotify = true;
   bool hasKeys = false;
   String username = '';
   final store = LocalTradeStore();
@@ -56,6 +57,7 @@ class _AccountPageState extends State<AccountPage> {
       preferFutures = p.getBool('prefer_futures_execution') ?? false;
       realtimeScanner = p.getBool('realtime_futures_scanner') ?? false;
       realtimeNotify = p.getBool('realtime_notify') ?? true;
+      androidOsNotify = p.getBool('android_os_notify') ?? true;
       username = p.getString('signalyab_username') ?? widget.currentUsername;
       _userCtrl.text = username;
     });
@@ -209,31 +211,39 @@ class _AccountPageState extends State<AccountPage> {
               onChanged: (v) => _setBool('auto_transfer_futures', v),
             ),
             const Divider(),
-            Text(en ? 'Real-Time Futures Scanner' : 'اسکنر لحظه‌ای فیوچرز',
+            Text(en ? 'Futures Market Watcher' : 'پایش بازار فیوچرز',
                 style: Theme.of(context).textTheme.titleSmall),
             SwitchListTile(
               title: Text(en
                   ? 'Real-Time Scanner (default OFF)'
                   : 'اسکنر لحظه‌ای (پیش‌فرض خاموش)'),
               subtitle: Text(en
-                  ? 'Auto-scan markets while app is open. No fake signals.'
-                  : 'پایش خودکار وقتی برنامه باز است. سیگنال جعلی نمی‌سازد.'),
+                  ? 'Auto-scan markets while app process is alive. No fake signals.'
+                  : 'پایش خودکار وقتی فرآیند برنامه زنده است. سیگنال جعلی نمی‌سازد.'),
               value: realtimeScanner,
               onChanged: (v) => _setBool('realtime_futures_scanner', v),
             ),
             SwitchListTile(
               title: Text(en ? 'In-app alerts' : 'هشدار داخل برنامه'),
               subtitle: Text(en
-                  ? 'A/A+ only; fingerprint prevents spam'
-                  : 'فقط A/A+؛ اثر انگشت جلوی تکرار را می‌گیرد'),
+                  ? 'SnackBar for A/A+; fingerprint prevents spam'
+                  : 'SnackBar برای A/A+؛ اثر انگشت جلوی تکرار را می‌گیرد'),
               value: realtimeNotify,
               onChanged: (v) => _setBool('realtime_notify', v),
             ),
+            SwitchListTile(
+              title: Text(en ? 'Android OS notification' : 'اعلان Android'),
+              subtitle: Text(en
+                  ? 'System tray alert for A/A+. Does not place orders.'
+                  : 'اعلان سیستم برای A/A+. سفارش خودکار نمی‌فرستد.'),
+              value: androidOsNotify,
+              onChanged: (v) => _setBool('android_os_notify', v),
+            ),
             Text(
               en
-                  ? 'OS background 24/7 is not guaranteed on Android. '
+                  ? 'OS background 24/7 is NOT guaranteed when the process is killed. '
                       'When no valid setup: NO VALID OPPORTUNITY.'
-                  : 'اجرای دائمی پس‌زمینه در اندروید تضمینی نیست. '
+                  : 'اجرای دائمی پس‌زمینه وقتی فرآیند کشته شود تضمینی نیست. '
                       'اگر فرصت معتبر نباشد: فرصت معتبری نیست.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
