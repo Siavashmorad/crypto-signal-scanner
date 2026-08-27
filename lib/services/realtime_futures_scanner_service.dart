@@ -2,6 +2,7 @@ import 'dart:async';
 
 import '../models/market_data.dart';
 import 'scanner_service.dart';
+import 'paper_journal_resolver.dart';
 import 'signal_journal.dart';
 import 'signal_notification_service.dart';
 
@@ -231,6 +232,12 @@ class RealtimeFuturesScannerService {
 
       lastOpps = opps;
       lastOpportunityCount = opps.length;
+
+      // Close aged paper journal entries using real subsequent market data.
+      try {
+        await PaperJournalResolver(api: scanner.api).resolvePending(journal);
+      } catch (_) {}
+
       onOpportunities?.call(opps);
 
       if (src == 'tabdeal') {
