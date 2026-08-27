@@ -43,12 +43,27 @@ void main() {
     final resolved = PaperForwardResolver().resolve(entry, candles);
     expect(resolved.outcome, JournalOutcome.win);
 
-    final closed = [
+    final closed = <JournalEntry>[
       resolved,
       ...List.generate(
         19,
-        (i) => resolved.copyWith(
+        (i) => JournalEntry(
           id: 'paper-${i + 2}',
+          timestamp: DateTime.fromMillisecondsSinceEpoch(i + 1),
+          symbol: 'BTCUSDT',
+          timeframe: '15m',
+          side: 'LONG',
+          regime: 'TRENDING BULL',
+          quality: 'A',
+          score: 80,
+          confidence: 80,
+          entry: 100,
+          stopLoss: 95,
+          tp1: 110,
+          tp2: 115,
+          tp3: 120,
+          riskReward: 2,
+          mode: JournalMode.paper,
           outcome: JournalOutcome.loss,
           rMultiple: -1,
         ),
