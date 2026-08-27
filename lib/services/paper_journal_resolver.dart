@@ -35,7 +35,7 @@ class PaperJournalResolver {
     return const Duration(minutes: 15);
   }
 
-  /// Returns how many pending entries were closed (win/loss/expired/…).
+  /// Returns how many pending entries were closed (win/loss/expired/breakeven).
   Future<int> resolvePending(
     SignalJournal journal, {
     int maxBars = 48,
@@ -54,7 +54,7 @@ class PaperJournalResolver {
 
     for (final entry in bySymbol.entries) {
       final symbol = entry.key;
-      List<TradePoint> trades = const [];
+      List<TradePoint> trades = <TradePoint>[];
       try {
         trades = await api.trades(symbol, limit: tradeLimit);
       } catch (_) {}
