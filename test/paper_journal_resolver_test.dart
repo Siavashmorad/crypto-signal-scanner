@@ -6,7 +6,7 @@ import 'package:crypto_signal_scanner/services/performance_analytics.dart';
 import 'package:crypto_signal_scanner/services/signal_journal.dart';
 
 void main() {
-  test('pending resolves to closed and analytics counts closed', () {
+  test('pending resolves to win and 20 closed clears insufficient sample', () {
     final entry = JournalEntry(
       id: 'paper-1',
       timestamp: DateTime.fromMillisecondsSinceEpoch(0),
@@ -43,32 +43,30 @@ void main() {
     final resolved = PaperForwardResolver().resolve(entry, candles);
     expect(resolved.outcome, JournalOutcome.win);
 
-    final closed = <JournalEntry>[
-      resolved,
-      ...List.generate(
-        19,
-        (i) => JournalEntry(
-          id: 'paper-${i + 2}',
-          timestamp: DateTime.fromMillisecondsSinceEpoch(i + 1),
-          symbol: 'BTCUSDT',
-          timeframe: '15m',
-          side: 'LONG',
-          regime: 'TRENDING BULL',
-          quality: 'A',
-          score: 80,
-          confidence: 80,
-          entry: 100,
-          stopLoss: 95,
-          tp1: 110,
-          tp2: 115,
-          tp3: 120,
-          riskReward: 2,
-          mode: JournalMode.paper,
-          outcome: JournalOutcome.loss,
-          rMultiple: -1,
-        ),
+    final closed = List<JournalEntry>.generate(
+      20,
+      (i) => JournalEntry(
+        id: 'paper-$i',
+        timestamp: DateTime.fromMillisecondsSinceEpoch(i + 1),
+        symbol: 'BTCUSDT',
+        timeframe: '15m',
+        side: 'LONG',
+        regime: 'TRENDING BULL',
+        quality: 'A',
+        score: 80,
+        confidence: 80,
+        entry: 100,
+        stopLoss: 95,
+        tp1: 110,
+        tp2: 115,
+        tp3: 120,
+        riskReward: 2,
+        mode: JournalMode.paper,
+        outcome: JournalOutcome.win,
+        rMultiple: 2.0,
       ),
-    ];
+    );
+
     final report = PerformanceAnalytics(minSample: 20).build(closed);
     expect(report.overallPaper.insufficientSample, isFalse);
     expect(report.overallPaper.sample, 20);
@@ -82,6 +80,7 @@ void main() {
       dataHealthy: true,
     );
     expect(gate.reason.contains('INSUFFICIENT SAMPLE'), isFalse);
+    expect(gate.allowLive, isTrue);
   });
 
   test('unresolved pending alone keeps insufficient sample', () {
@@ -110,5 +109,15 @@ void main() {
     expect(report.overallPaper.insufficientSample, isTrue);
     expect(report.overallPaper.pending, 19);
     expect(report.overallPaper.sample, 0);
+
+    final gate = LiveTradingGate(minSample: 20).evaluate(
+      journal: pending,
+      quality: 'B',
+      regime: 'UNKNOWN',
+      userLiveEnabled: true,
+      dataHealthy: true,
+    );
+    expect(gate.allowLive, isFalse);
+    expect(gate.reason.contains('INSUFFICIENT SAMPLE'), isTrue);
   });
 }
