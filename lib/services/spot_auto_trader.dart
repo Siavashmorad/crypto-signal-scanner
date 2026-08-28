@@ -1,7 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/market_data.dart';
-import 'account_balance.dart';
 import 'android_notification_service.dart';
 import 'auto_trade_history.dart';
 import 'fa_labels.dart';
