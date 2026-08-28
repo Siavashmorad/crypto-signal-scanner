@@ -1,0 +1,114 @@
+de
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    androidNotify = AndroidNotificationService(
+      onSelect: (payload) {
+        // ignore: discarded_futures
+        _onNotificationTap(payload);
+      },
+    );
+    // ignore: discarded_futures
+    androidNotify.init().then((_) => _handleLaunchFromNotification());
+    _pushSub = appPush.opportunityOpened.listen((p) {
+      // ignore: discarded_futures
+      _handleFcmOpportunity(p);
+    });
+    if (widget.pendingPush != null) {
+      // ignore: discarded_futures
+      Future.microtask(() => _handleFcmOpportunity(widget.pendingPush!));
+    }
+    _checkTabdeal();
+    _refreshTradeStatus();
+  }
+
+  Future<void> _onNotificationTap(String? payload) async {
+    final fcm = FcmOpportunityPayload.fromLocalPayload(payload);
+    if (fcm != null) {
+      await _handleFcmOpportunity(fcm);
+      return;
+    }
+    final parsed = AndroidNotificationService.parsePayload(payload);
+    if (parsed == null) return;
+    await _handleFcmOpportunity(FcmOpportunityPayload(
+      type: 'signal_opportunity',
+      opportunityId: '${parsed.symbol}|${parsed.side}',
+      symbol: parsed.symbol,
+      side: parsed.side,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+    ));
+  }
+
+  /// FCM open → live rescan → revalidate → placeOnPhone. Never auto-orders.
+  Future<void> _handleFcmOpportunity(FcmOpportunityPayload payload) async {
+    if (_handlingPush) return;
+    _handlingPush = true;
+    final en = widget.english;
+    try {
+      if (!mounted) return;
+      MarketSignal? live;
+      try {
+        live = await scanner.scanSymbol(payload.symbol, duration);
+      } catch (_) {
+        live = null;
+      }
+      if (live == null) {
+        for (final s in signals) {
+          if (s.symbol.toUpperCase() == payload.symbol &&
+              s.side.toUpperCase() == payload.side) {
+            live = s;
+            break;
+          }
+        }
+      }
+      final result = _pushHandler.evaluate(payload: payload, live: live);
+      if (!mounted) return;
+      if (result.decision == PushOpenDecision.reject) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Text(en ? 'Opportunity expired' : 'فرصت منقضی'),
+            content: Text(en ? result.reasonEn : result.reasonFa),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(en ? 'OK' : 'باشه'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+      final signal = result.liveSignal;
+      if (signal == null) return;
+      await placeOnPhone(signal, isOpen: true);
+    } finally {
+      _handlingPush = false;
+    }
+  }
+
+  Future<void> _handleLaunchFromNotification() async {}
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final fg = state == AppLifecycleState.resumed;
+    realtime?.setForeground(fg);
+  }
+
+  Future<void> _refreshTvHints() async {
+    if (!tvSignals.enabled || tvSignals.baseUrl.trim().isEmpty) {
+      realtime?.externalHints = const {};
+      if (mounted) {
+        setState(() {
+          tvStatusLabel = widget.english ? 'TV: OFF' : 'TV: خاموش';
+        });
+      }
+      return;
+    }
+    try {
+      final alerts = await tvSignals.fetchAlerts();
+      final hints = <String, String>{};
+      for (final a in alerts) {
+        if (a.isActionable) hints[a.symbol] = a.signal;
+      }
+  
