@@ -1,0 +1,113 @@
+n'
+            '${en ? 'Spot only. No guaranteed profit.' : 'فقط اسپات. سود تضمینی نیست.'}',
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(en ? 'Cancel' : 'لغو')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(en ? 'Confirm & send' : 'تأیید و ارسال سفارش')),
+        ],
+      ),
+    );
+    if (ok != true) {
+      client.dispose();
+      return;
+    }
+    try {
+      final res = await client.marketOrder(
+        symbol: signal.symbol,
+        side: side,
+        quantity: size.finalQty,
+      );
+      final tracked = TrackedOrder.fromApi(res, fallbackSymbol: signal.symbol);
+      lastFills[signal.symbol] = res;
+      await signalJournal.record(JournalEntry.fromSignal(
+        signal,
+        quality: q,
+        score: signal.confidence,
+        confidence: signal.confidence,
+        reasons: 'live fill ${tracked.orderId ?? ''}',
+        mode: JournalMode.live,
+        isLive: true,
+      ));
+      client.dispose();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          '${en ? 'SPOT' : 'اسپات'} ${tracked.rawStatus} '
+          'id=${tracked.orderId ?? '-'}',
+        ),
+      ));
+    } catch (e) {
+      client.dispose();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('Bad state: ', '')),
+      ));
+    }
+  }
+
+  Future<void> _placeFuturesOnPhone(MarketSignal signal) async {
+    final en = widget.english;
+    // Resolve pending paper trades before Live Gate (FUTURES).
+    await PaperJournalResolver(api: api).resolvePending(signalJournal);
+    final journal = await signalJournal.load();
+    final q = signal.confidence >= 85
+        ? 'A+'
+        : signal.confidence >= 72
+            ? 'A'
+            : signal.confidence >= 58
+                ? 'B'
+                : 'C';
+    final gate = liveGate.evaluate(
+      journal: journal,
+      quality: q,
+      regime: 'UNKNOWN',
+      userLiveEnabled: true,
+      dataHealthy: tabdealLinked,
+    );
+    if (!gate.allowLive) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(en ? 'LIVE GATE' : 'قفل معامله زنده'),
+          content: Text(gate.reason),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(en ? 'OK' : 'باشه')),
+          ],
+        ),
+      );
+      return;
+    }
+    final client = TabdealTradeClient(
+      apiKey: await tradeStore.apiKey(),
+      apiSecret: await tradeStore.apiSecret(),
+    );
+    final exec = FuturesExecutionService(client);
+    final filters = await rules.filtersFor(signal.symbol);
+    final entry = signal.entry;
+    if (entry <= 0) {
+      client.dispose();
+      return;
+    }
+    final sl = signal.stopLoss > 0
+        ? signal.stopLoss
+        : (signal.side.toUpperCase() == 'SHORT' ? entry * 1.01 : entry * 0.99);
+    final plan = await exec.buildPlan(
+      symbol: signal.symbol,
+      side: signal.side,
+      entry: entry,
+      stopLoss: sl,
+      takeProfit: signal.tp1 > 0 ? signal.tp1 : null,
+      riskPercent: 1.0,
+      leverage: 5,
+      filters: filters,
+    );
+    if (plan == null || !plan.size.allow) {
+      client.dispo
