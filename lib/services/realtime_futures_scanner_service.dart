@@ -89,9 +89,11 @@ class RealtimeFuturesScannerService {
   Duration intervalBackground = const Duration(minutes: 5);
   bool foreground = true;
   bool allowBackgroundPolling = true;
-  int maxSymbols = 16;
-  int maxSignals = 10;
+  int maxSymbols = 32;
+  int maxSignals = 12;
   Duration timeframe = const Duration(minutes: 15);
+  /// Prefer SPOT USDT universe (default true — Futures is opt-in).
+  bool preferSpot = true;
 
   /// Optional external side hints (e.g. TradingView) — never invents scores.
   /// Map symbol → LONG/SHORT. Used only to prefer matching scanner results.
@@ -160,6 +162,7 @@ class RealtimeFuturesScannerService {
         maxConcurrency: 6,
         maxSymbols: maxSymbols,
         maxSignals: maxSignals,
+        preferSpot: preferSpot,
       );
       lastSuccess = DateTime.now();
       lastScannedCount = maxSymbols;
