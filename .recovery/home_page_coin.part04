@@ -1,0 +1,122 @@
+_background_polling') ?? true;
+      final minQ = prefsRt.getString('realtime_notify_min_quality') ?? 'A';
+      realtime!.notifications.minQualityForNotify = minQ;
+      final tvOn = prefsRt.getBool('tradingview_enabled') ?? false;
+      final tvUrl = prefsRt.getString('tradingview_backend_url') ?? '';
+      tvSignals.enabled = tvOn;
+      tvSignals.baseUrl = tvUrl;
+      tvSignals.username =
+          prefsRt.getString('signalyab_username') ?? ownerUsername;
+      tvSignals.password =
+          prefsRt.getString('signalyab_backend_password') ?? '';
+      await _refreshTvHints();
+      _tvPollTimer?.cancel();
+      _tvPollTimer = Timer.periodic(const Duration(seconds: 90), (_) {
+        // ignore: discarded_futures
+        _refreshTvHints();
+      });
+      await realtime!.start();
+    } else {
+      _tvPollTimer?.cancel();
+      _tvPollTimer = null;
+      realtime?.stop();
+      if (mounted) {
+        setState(() => tvStatusLabel = '');
+      }
+    }
+  }
+
+  Future<void> _refreshTradeStatus() async {
+    final has = await tradeStore.hasKeys();
+    final live = await tradeStore.liveEnabled();
+    final p = await SharedPreferences.getInstance();
+    final prefer = p.getBool('prefer_futures_execution') ?? false;
+    final rt = p.getBool('realtime_futures_scanner') ?? false;
+    final notify = p.getBool('realtime_notify') ?? true;
+    final osNotify = p.getBool('android_os_notify') ?? true;
+    if (!mounted) return;
+    setState(() {
+      liveOn = live && has;
+      preferFutures = prefer;
+      realtimeOn = rt;
+      realtimeNotify = notify;
+      androidOsNotify = osNotify;
+    });
+    androidNotify.enabled = osNotify;
+    await _syncRealtime(rt);
+  }
+
+  Future<void> _openDiagnose() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ConnectionDiagnosePage(english: widget.english, api: api),
+    ));
+    await _checkTabdeal();
+  }
+
+  Future<void> _openChart(MarketSignal s) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => MarketChartPage(
+        signal: s,
+        api: api,
+        english: widget.english,
+        lastOrderFill: lastFills[s.symbol],
+      ),
+    ));
+  }
+
+  Future<void> _checkTabdeal() async {
+    setState(() => checkingLink = true);
+    final ok = await api.ping();
+    if (!mounted) return;
+    setState(() {
+      tabdealLinked = ok;
+      checkingLink = false;
+      status = ok
+          ? (widget.english
+              ? 'Tabdeal OK (${api.activeHost})'
+              : 'تبدیل وصل است (${api.activeHost})')
+          : (widget.english
+              ? 'Tabdeal offline — tap to diagnose'
+              : 'تبدیل قطع — برای تست بزنید');
+    });
+  }
+
+  Future<void> scan() async {
+    if (loading) return;
+    setState(() {
+      loading = true;
+      status = widget.english ? 'Scanning...' : 'در حال اسکن...';
+    });
+    final started = DateTime.now();
+    try {
+      final preferFutures =
+          (await SharedPreferences.getInstance()).getBool('prefer_futures_execution') ??
+              false;
+      final result = await scanner.scanAll(
+        timeframe: duration,
+        maxConcurrency: 8,
+        maxSymbols: 40,
+        maxSignals: 15,
+        preferSpot: !preferFutures,
+      );
+      final secs = DateTime.now().difference(started).inSeconds;
+      final src = scanner.dataSource;
+      if (!mounted) return;
+      final filtered = signalCooldown.filter(result);
+      for (final s in filtered) {
+        await signalJournal.record(JournalEntry.fromSignal(
+          s,
+          regime: 'UNKNOWN',
+          quality: s.confidence >= 85
+              ? 'A+'
+              : s.confidence >= 72
+                  ? 'A'
+                  : s.confidence >= 58
+                      ? 'B'
+                      : 'C',
+          score: s.confidence,
+          confidence: s.confidence,
+          reasons: 'scanner',
+          mode: JournalMode.paper,
+        ));
+      }
