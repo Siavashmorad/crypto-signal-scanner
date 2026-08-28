@@ -1,0 +1,96 @@
+Phone(signal);
+      return;
+    }
+    // Resolve pending paper trades before Live Gate (SPOT).
+    await PaperJournalResolver(api: api).resolvePending(signalJournal);
+    final journal = await signalJournal.load();
+    final q = signal.confidence >= 85
+        ? 'A+'
+        : signal.confidence >= 72
+            ? 'A'
+            : signal.confidence >= 58
+                ? 'B'
+                : 'C';
+    final gate = liveGate.evaluate(
+      journal: journal,
+      quality: q,
+      regime: 'UNKNOWN',
+      userLiveEnabled: live,
+      dataHealthy: tabdealLinked,
+    );
+    if (!gate.allowLive) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(en ? 'LIVE GATE' : 'قفل معامله زنده'),
+          content: Text(gate.reason),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(en ? 'OK' : 'باشه')),
+          ],
+        ),
+      );
+      return;
+    }
+    final configured = await tradeStore.defaultQty();
+    final filters = await rules.filtersFor(signal.symbol);
+    final isLong = signal.side.toUpperCase() == 'LONG';
+    final side = isOpen ? (isLong ? 'BUY' : 'SELL') : (isLong ? 'SELL' : 'BUY');
+    final isBuy = side == 'BUY';
+    final client = TabdealTradeClient(
+      apiKey: await tradeStore.apiKey(),
+      apiSecret: await tradeStore.apiSecret(),
+    );
+    final snap = await client.accountSnapshot();
+    final quote = AccountSnapshot.quoteAsset(signal.symbol);
+    final available = snap.available
+        ? (isBuy ? snap.freeQuote(signal.symbol) : snap.freeBase(signal.symbol))
+        : 0.0;
+    final size = sizing.compute(
+      filters: filters,
+      configuredQty: configured,
+      currentPrice: signal.entry,
+      availableQuote: isBuy ? available : (available * signal.entry),
+      riskPercent: 0.01,
+      entry: signal.entry,
+      stopLoss: signal.stopLoss,
+      isBuy: isBuy,
+    );
+    if (!size.canSubmit) {
+      client.dispose();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(en ? 'NO TRADE' : 'بدون معامله'),
+          content: Text(
+            '${size.message}\n\n'
+            '${en ? 'Balance' : 'موجودی'} $quote: '
+            '${snap.available ? available.toStringAsFixed(4) : (snap.error ?? 'Unavailable')}',
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(en ? 'OK' : 'باشه')),
+          ],
+        ),
+      );
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(en ? 'Approve SPOT order' : 'تأیید سفارش اسپات'),
+        content: SingleChildScrollView(
+          child: Text(
+            '${signal.symbol}\n'
+            '${en ? 'Action' : 'عملیات'}: SPOT $side\n'
+            '${en ? 'Side' : 'جهت'}: ${signal.side}\n'
+            '${en ? 'Entry' : 'ورود'}: ${money(signal.entry)}\n'
+            '${en ? 'SL' : 'حد ضرر'}: ${money(signal.stopLoss)}\n'
+            '${en ? 'TP1' : 'هدف ۱'}: ${money(signal.tp1)}\n'
+            '${en ? 'Available' : 'موجودی آزاد'} ($quote): ${available.toStringAsFixed(4)}\n'
+            '${en ? 'Final qty' : 'حجم نهایی'}: ${size.finalQty}\n'
+            '${size.message}\n
