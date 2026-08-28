@@ -61,10 +61,10 @@ se();
     if (!mounted) return;
     final slL = result.slActive
         ? (en ? 'SL: ACTIVE' : 'SL: فعال')
-        : (en ? 'SL: NOT CONFIRMED' : 'حد ضرر: تأیید نشد');
+        : (en ? 'SL: NOT CONFIRMED' : 'تأیید نشد');
     final tpL = result.tpActive
         ? (en ? 'TP: ACTIVE' : 'TP: فعال')
-        : (en ? 'TP: NOT CONFIRMED' : 'هدف: تأیید نشد');
+        : (en ? 'TP: NOT CONFIRMED' : 'تأیید نشد');
     final posL = result.ok && result.position != null
         ? (en ? 'POSITION OPENED' : 'POSITION OPENED — پوزیشن باز شد')
         : (result.o
