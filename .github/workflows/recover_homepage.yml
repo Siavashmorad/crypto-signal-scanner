@@ -22,7 +22,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/home-recovery
-          base64 -d .recovery/home_page_coin.gz.b64 | gzip -d > /tmp/home-recovery/home_page.dart
+          cat .recovery/home_page_coin.gz.b64.p{1,2,3,4,5} > /tmp/home-recovery/home_page.b64
+          base64 -d /tmp/home-recovery/home_page.b64 | gzip -d > /tmp/home-recovery/home_page.dart
           bytes=$(wc -c < /tmp/home-recovery/home_page.dart | tr -d ' ')
           sha=$(sha256sum /tmp/home-recovery/home_page.dart | awk '{print $1}')
           echo "DECODED bytes=$bytes sha=$sha"
