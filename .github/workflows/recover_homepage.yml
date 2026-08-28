@@ -1,0 +1,59 @@
+name: Recover complete HomePage
+
+on:
+  push:
+    branches:
+      - recovery-homepage-20260829
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout recovery branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Assemble and verify HomePage
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/home-recovery
+          cat .recovery/home_page_coin.part{01,02,03,04,05,06,07,08,09,10,11,12,13} > /tmp/home-recovery/home_page.dart
+          bytes=$(wc -c < /tmp/home-recovery/home_page.dart | tr -d ' ')
+          sha=$(sha256sum /tmp/home-recovery/home_page.dart | awk '{print $1}')
+          test "$bytes" = "44793"
+          test "$sha" = "5dd7d2a4d3855c31ad16bb250f9909295c210a78c23f090a034f9e765b0e43c2"
+          ! grep -Eq 'PLACEHOLDER|LOADING_FROM_ARTIFACT|TRUNCATED|channel truncated' /tmp/home-recovery/home_page.dart
+          grep -q 'SpotAutoTrader' /tmp/home-recovery/home_page.dart
+          grep -q 'CoinAnalysisPage' /tmp/home-recovery/home_page.dart
+          grep -q 'FaLabels' /tmp/home-recovery/home_page.dart
+          grep -q 'preferSpot' /tmp/home-recovery/home_page.dart
+          grep -q 'PaperJournalResolver' /tmp/home-recovery/home_page.dart
+          echo "Verified $bytes bytes sha256=$sha"
+
+      - name: Publish verified HomePage to target branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin feat/futures-wallet-execution
+          git checkout -B feat/futures-wallet-execution origin/feat/futures-wallet-execution
+          cp /tmp/home-recovery/home_page.dart lib/widgets/home_page.dart
+          bytes=$(wc -c < lib/widgets/home_page.dart | tr -d ' ')
+          sha=$(sha256sum lib/widgets/home_page.dart | awk '{print $1}')
+          test "$bytes" = "44793"
+          test "$sha" = "5dd7d2a4d3855c31ad16bb250f9909295c210a78c23f090a034f9e765b0e43c2"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/widgets/home_page.dart
+          if git diff --cached --quiet; then
+            echo "HomePage already matches verified artifact"
+          else
+            git commit -m "fix: restore complete HomePage with Coin Analysis and SPOT trading"
+            git push origin HEAD:feat/futures-wallet-execution
+          fi
