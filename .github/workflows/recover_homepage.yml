@@ -22,23 +22,26 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/home-recovery
+          for f in .recovery/home_page_coin.part{01,02,03,04,05,06,07,08,09,10,11,12,13}; do
+            echo "$(basename "$f") bytes=$(wc -c < "$f" | tr -d ' ') sha=$(sha256sum "$f" | awk '{print $1}')"
+          done
           cat .recovery/home_page_coin.part{01,02,03,04,05,06,07,08,09,10,11,12,13} > /tmp/home-recovery/home_page.dart
           bytes=$(wc -c < /tmp/home-recovery/home_page.dart | tr -d ' ')
           sha=$(sha256sum /tmp/home-recovery/home_page.dart | awk '{print $1}')
-          test "$bytes" = "44793"
-          test "$sha" = "5dd7d2a4d3855c31ad16bb250f9909295c210a78c23f090a034f9e765b0e43c2"
+          echo "ASSEMBLED bytes=$bytes sha=$sha"
+          if [ "$bytes" != "44793" ] || [ "$sha" != "5dd7d2a4d3855c31ad16bb250f9909295c210a78c23f090a034f9e765b0e43c2" ]; then
+            echo "HomePage artifact verification FAILED"
+            exit 1
+          fi
           ! grep -Eq 'PLACEHOLDER|LOADING_FROM_ARTIFACT|TRUNCATED|channel truncated' /tmp/home-recovery/home_page.dart
           grep -q 'SpotAutoTrader' /tmp/home-recovery/home_page.dart
           grep -q 'CoinAnalysisPage' /tmp/home-recovery/home_page.dart
           grep -q 'FaLabels' /tmp/home-recovery/home_page.dart
           grep -q 'preferSpot' /tmp/home-recovery/home_page.dart
           grep -q 'PaperJournalResolver' /tmp/home-recovery/home_page.dart
-          echo "Verified $bytes bytes sha256=$sha"
 
       - name: Publish verified HomePage to target branch
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git fetch origin feat/futures-wallet-execution
