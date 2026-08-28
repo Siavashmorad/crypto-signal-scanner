@@ -1,0 +1,107 @@
+signalJournal.record(JournalEntry.fromSignal(
+          s,
+          regime: 'UNKNOWN',
+          quality: s.confidence >= 85
+              ? 'A+'
+              : s.confidence >= 72
+                  ? 'A'
+                  : s.confidence >= 58
+                      ? 'B'
+                      : 'C',
+          score: s.confidence,
+          confidence: s.confidence,
+          reasons: 'scanner',
+          mode: JournalMode.paper,
+        ));
+      }
+      try {
+        await PaperJournalResolver(api: api).resolvePending(signalJournal);
+      } catch (_) {}
+      try {
+        final trader = SpotAutoTrader(api: api);
+        await trader.tryAutoOpen(
+          ranked: filtered,
+          tabdealLinked: src == 'tabdeal' || tabdealLinked,
+        );
+        await trader.monitorAndClose();
+      } catch (_) {}
+      setState(() {
+        signals = filtered;
+        marketCount = filtered.map((e) => e.symbol).toSet().length;
+        loading = false;
+        tabdealLinked = src == 'tabdeal' || tabdealLinked;
+        final srcLabel = src == 'tabdeal'
+            ? (widget.english ? 'Tabdeal' : 'تبدیل')
+            : src == 'binance'
+                ? (widget.english ? 'Binance fallback' : 'پشتیبان بایننس')
+                : '?';
+        status = filtered.isEmpty
+            ? (widget.english
+                ? 'No setup (${secs}s) via $srcLabel'
+                : 'سیگنال نبود ($secsث) از $srcLabel')
+            : (widget.english
+                ? '${filtered.length} setups in ${secs}s ($srcLabel)'
+                : '${filtered.length} فرصت در $secsث ($srcLabel)');
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        loading = false;
+        status = e.toString().replaceFirst('TabdealApiException: ', '');
+      });
+    }
+  }
+
+  Future<void> analyzeWithAi(MarketSignal signal) async {
+    if (aiLoading) return;
+    setState(() {
+      selectedForAi = signal;
+      aiAnalysis = null;
+      aiError = null;
+      aiLoading = true;
+    });
+    try {
+      final result = await ai.analyze(
+        signal: signal,
+        username: widget.aiUsername ?? ownerUsername,
+        password: widget.aiPassword ?? 'local',
+      );
+      if (!mounted) return;
+      setState(() {
+        aiAnalysis = result;
+        aiLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        aiLoading = false;
+        aiError = e.toString().replaceFirst('Bad state: ', '');
+      });
+    }
+  }
+
+  Future<void> placeOnPhone(MarketSignal signal, {required bool isOpen}) async {
+    final en = widget.english;
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('emergency_stop') ?? false) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(en
+            ? 'EMERGENCY STOP ACTIVE — orders blocked'
+            : 'توقف اضطراری فعال — سفارش مسدود'),
+      ));
+      return;
+    }
+    final has = await tradeStore.hasKeys();
+    final live = await tradeStore.liveEnabled();
+    if (!has || !live) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(en
+            ? 'Open wallet settings: API key + LIVE'
+            : 'تنظیمات کیف پول: کلید API + سفارش واقعی'),
+      ));
+      return;
+    }
+    if ((prefs.getBool('prefer_futures_execution') ?? false) && isOpen) {
+      await _placeFuturesOn
