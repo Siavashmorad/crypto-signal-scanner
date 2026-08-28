@@ -198,15 +198,23 @@ class ScannerService {
     int maxConcurrency = 10,
     int maxSymbols = 24,
     int maxSignals = 12,
+    /// When true, prefer SPOT USDT markets (not Futures universe).
+    bool preferSpot = true,
   }) async {
     dataSource = 'none';
     List<String> symbols;
     try {
-      // Prefer official FAPI universe when available.
-      symbols = await api.activeFuturesSymbols(maxSymbols: maxSymbols);
+      if (preferSpot) {
+        symbols = await api.activeUsdtSymbols(maxSymbols: maxSymbols);
+      } else {
+        // Prefer official FAPI universe when Futures mode requested.
+        symbols = await api.activeFuturesSymbols(maxSymbols: maxSymbols);
+      }
     } catch (_) {
       try {
-        symbols = await api.activeUsdtSymbols(maxSymbols: maxSymbols);
+        symbols = preferSpot
+            ? await api.activeFuturesSymbols(maxSymbols: maxSymbols)
+            : await api.activeUsdtSymbols(maxSymbols: maxSymbols);
       } catch (_) {
         symbols = TabdealApi.fallbackSymbols.take(maxSymbols).toList();
       }
