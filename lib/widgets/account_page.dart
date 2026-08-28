@@ -24,6 +24,7 @@ class _AccountPageState extends State<AccountPage> {
   bool emergencyStop = false;
   bool autoTransfer = false;
   bool preferFutures = false;
+  bool autoStrongSpot = false;
   bool realtimeScanner = false;
   bool realtimeNotify = true;
   bool androidOsNotify = true;
@@ -59,6 +60,7 @@ class _AccountPageState extends State<AccountPage> {
       emergencyStop = p.getBool('emergency_stop') ?? false;
       autoTransfer = p.getBool('auto_transfer_futures') ?? false;
       preferFutures = p.getBool('prefer_futures_execution') ?? false;
+      autoStrongSpot = p.getBool('auto_strong_spot_trade') ?? false;
       realtimeScanner = p.getBool('realtime_futures_scanner') ?? false;
       realtimeNotify = p.getBool('realtime_notify') ?? true;
       androidOsNotify = p.getBool('android_os_notify') ?? true;
@@ -206,12 +208,24 @@ class _AccountPageState extends State<AccountPage> {
               onChanged: (v) => _setBool('emergency_stop', v),
             ),
             SwitchListTile(
-              title: Text(en ? 'Prefer Futures execution' : 'اجرای فیوچرز'),
+              title: Text(en
+                  ? 'Prefer Futures execution (advanced)'
+                  : 'اجرای فیوچرز (پیشرفته — پیش‌فرض خاموش)'),
               subtitle: Text(en
-                  ? 'When ON, live opens use Futures path'
-                  : 'در صورت فعال بودن، مسیر فیوچرز برای باز کردن استفاده می‌شود'),
+                  ? 'Default OFF. Keep OFF for SPOT-focused trading.'
+                  : 'پیش‌فرض خاموش. برای بازار نقدی خاموش بماند.'),
               value: preferFutures,
               onChanged: (v) => _setBool('prefer_futures_execution', v),
+            ),
+            SwitchListTile(
+              title: Text(en
+                  ? 'Auto-trade very strong SPOT (≥90)'
+                  : 'معامله خودکار فرصت‌های بسیار قوی'),
+              subtitle: Text(en
+                  ? 'SPOT only when score ≥ 90. Live Gate, risk, SL/TP, notional≤50 still apply. Default OFF.'
+                  : 'فقط بازار نقدی با امتیاز ≥ ۹۰. قفل زنده، ریسک، حد ضرر/سود و سقف ۵۰ تتر همچنان اعمال می‌شود. پیش‌فرض خاموش.'),
+              value: autoStrongSpot,
+              onChanged: (v) => _setBool('auto_strong_spot_trade', v),
             ),
             SwitchListTile(
               title: Text(en
@@ -224,15 +238,15 @@ class _AccountPageState extends State<AccountPage> {
               onChanged: (v) => _setBool('auto_transfer_futures', v),
             ),
             const Divider(),
-            Text(en ? 'Futures Market Watcher' : 'پایش بازار فیوچرز',
+            Text(en ? 'Market auto-monitor' : 'پایش خودکار بازار',
                 style: Theme.of(context).textTheme.titleSmall),
             SwitchListTile(
               title: Text(en
-                  ? 'Real-Time Scanner (default OFF)'
-                  : 'اسکنر لحظه‌ای (پیش‌فرض خاموش)'),
+                  ? 'Auto market scan (default OFF)'
+                  : 'پایش خودکار بازار (پیش‌فرض خاموش)'),
               subtitle: Text(en
-                  ? 'Auto-scan while app process is alive. No fake signals.'
-                  : 'پایش خودکار وقتی فرآیند برنامه زنده است. سیگنال جعلی نمی‌سازد.'),
+                  ? 'Auto-scan while app process is alive. Not true 24/7 if OS kills process.'
+                  : 'پایش خودکار وقتی فرآیند برنامه زنده است. اگر سیستم‌عامل فرآیند را بکشد، متوقف می‌شود (۲۴/۷ تضمینی نیست).'),
               value: realtimeScanner,
               onChanged: (v) => _setBool('realtime_futures_scanner', v),
             ),
