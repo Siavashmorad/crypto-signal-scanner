@@ -1,0 +1,64 @@
+ney(s.tp1)} RR=1:${s.riskReward.toStringAsFixed(1)}\n'
+                                  'conf=${s.confidence.toStringAsFixed(0)}',
+                                ),
+                                isThreeLine: true,
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      tooltip: en ? 'Chart' : 'نمودار',
+                                      onPressed: () => _openChart(s),
+                                      icon: const Icon(Icons.show_chart),
+                                    ),
+                                    IconButton(
+                                      tooltip: en ? 'AI' : 'تحلیل',
+                                      onPressed: () => analyzeWithAi(s),
+                                      icon: const Icon(Icons.psychology),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              FilledButton.icon(
+                                onPressed: () => placeOnPhone(s, isOpen: true),
+                                icon: Icon(
+                                  preferFutures
+                                      ? Icons.candlestick_chart
+                                      : Icons.shopping_cart_checkout,
+                                ),
+                                label: Text(
+                                  _openButtonLabel(s, en),
+                                  textAlign: TextAlign.center,
+                                ),
+                                style: FilledButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 12,
+                                    horizontal: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+              ],
+              if (selectedForAi != null || aiLoading || aiError != null)
+                Card(
+                  child: ListTile(
+                    title: Text(en ? 'AI' : 'تحلیل'),
+                    subtitle: Text(aiLoading
+                        ? '...'
+                        : (aiError ??
+                            (aiAnalysis?.summary ??
+                                selectedForAi?.symbol ??
+                                ''))),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
