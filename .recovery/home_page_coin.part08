@@ -1,0 +1,70 @@
+se();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(plan?.size.reason ??
+            (en ? 'Futures unavailable' : 'فیوچرز در دسترس نیست')),
+      ));
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final autoXfer = prefs.getBool('auto_transfer_futures') ?? false;
+    final needConfirm = plan.needsTransfer ? !autoXfer : true;
+    if (needConfirm) {
+      final sideLabel = plan.side.toUpperCase() == 'SHORT' ? 'SHORT' : 'LONG';
+      final xferLine = plan.needsTransfer && plan.transferAmount > 0
+          ? (en
+              ? 'Transfer Spot→Futures: ${plan.transferAmount.toStringAsFixed(4)}\n'
+              : 'انتقال اسپات→فیوچرز: ${plan.transferAmount.toStringAsFixed(4)}\n')
+          : (en ? 'No transfer needed\n' : 'نیازی به انتقال نیست\n');
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(en ? 'Open FUTURES position' : 'باز کردن پوزیشن FUTURES'),
+          content: SingleChildScrollView(
+            child: Text(
+              '${plan.symbol}\n'
+              '${en ? 'Side' : 'جهت'}: $sideLabel\n'
+              '${en ? 'Entry' : 'ورود'}: ${money(plan.entry)}\n'
+              '${en ? 'Qty' : 'حجم'}: ${plan.size.quantity}\n'
+              '${en ? 'Leverage' : 'اهرم'}: ${plan.leverage.toStringAsFixed(0)}x\n'
+              '${en ? 'Required margin' : 'وجه موردنیاز'}: ${plan.size.requiredMargin.toStringAsFixed(4)}\n'
+              '${en ? 'Futures available' : 'موجودی فیوچرز'}: ${plan.futuresAvailable.toStringAsFixed(4)}\n'
+              '${en ? 'Spot free' : 'اسپات آزاد'}: ${plan.spotFree.toStringAsFixed(4)}\n'
+              '$xferLine'
+              '${en ? 'SL' : 'حد ضرر'}: ${money(plan.stopLoss)}\n'
+              '${en ? 'TP' : 'هدف'}: ${plan.takeProfit != null ? money(plan.takeProfit!) : '-'}\n'
+              '${en ? 'Risk' : 'ریسک'}: ${plan.size.riskAmount.toStringAsFixed(4)}\n'
+              '${en ? 'AI Quality' : 'کیفیت'}: $q\n'
+              '${en ? 'AI Score' : 'امتیاز'}: ${signal.confidence.toStringAsFixed(0)}\n'
+              '${en ? 'Gate' : 'گیت'}: PASS\n\n'
+              '${en ? 'Only exact required margin. No guaranteed profit.' : 'فقط حاشیه دقیق. سود تضمینی نیست.'}',
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(en ? 'Cancel' : 'لغو')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child:
+                    Text(en ? 'Confirm & send order' : 'تأیید و ارسال سفارش')),
+          ],
+        ),
+      );
+      if (ok != true) {
+        client.dispose();
+        return;
+      }
+    }
+    final result = await exec.execute(plan);
+    client.dispose();
+    if (!mounted) return;
+    final slL = result.slActive
+        ? (en ? 'SL: ACTIVE' : 'SL: فعال')
+        : (en ? 'SL: NOT CONFIRMED' : 'حد ضرر: تأیید نشد');
+    final tpL = result.tpActive
+        ? (en ? 'TP: ACTIVE' : 'TP: فعال')
+        : (en ? 'TP: NOT CONFIRMED' : 'هدف: تأیید نشد');
+    final posL = result.ok && result.position != null
+        ? (en ? 'POSITION OPENED' : 'POSITION OPENED — پوزیشن باز شد')
+        : (result.o
