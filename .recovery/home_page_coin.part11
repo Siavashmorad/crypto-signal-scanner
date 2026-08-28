@@ -1,0 +1,64 @@
+                en
+                                  ? 'Last update: ${realtime!.lastSuccess!.toLocal().toString().substring(0, 19)}'
+                                  : 'آخرین به‌روز: ${realtime!.lastSuccess!.toLocal().toString().substring(0, 19)}',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                        ],
+                        const SizedBox(height: 8),
+                        if (signals.isEmpty)
+                          Text(
+                            en
+                                ? 'NO VALID OPPORTUNITY'
+                                : 'فرصت معتبری پیدا نشد',
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          )
+                        else ...[
+                          Text(
+                            en
+                                ? '⭐ Best opportunity'
+                                : '⭐ بهترین فرصت بازار',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          Text(
+                            en
+                                ? '${signals.first.symbol}  ${signals.first.side}'
+                                : '${signals.first.symbol}  ${FaLabels.side(signals.first.side)}',
+                          ),
+                          Text(
+                            en
+                                ? 'Score: ${signals.first.confidence.toStringAsFixed(0)}/100 · ${FaLabels.scoreTier(signals.first.confidence)}'
+                                : 'امتیاز: ${signals.first.confidence.toStringAsFixed(0)} از ۱۰۰ · ${FaLabels.scoreTier(signals.first.confidence)}',
+                          ),
+                          Text(
+                            en
+                                ? 'Entry ${money(signals.first.entry)}  SL ${money(signals.first.stopLoss)}  TP ${money(signals.first.tp1)}'
+                                : 'ورود ${money(signals.first.entry)}  حد ضرر ${money(signals.first.stopLoss)}  حد سود ${money(signals.first.tp1)}',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          Text(
+                            en
+                                ? 'R/R 1:${signals.first.riskReward.toStringAsFixed(1)}'
+                                : 'نسبت سود به زیان ۱:${signals.first.riskReward.toStringAsFixed(1)}',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 8),
+                          FilledButton(
+                            onPressed: () =>
+                                placeOnPhone(signals.first, isOpen: true),
+                            child: Text(_openButtonLabel(signals.first, en)),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
