@@ -1,0 +1,134 @@
+                   value: timeframe,
+                              decoration: InputDecoration(
+                                labelText: en ? 'Timeframe' : 'تایم‌فریم',
+                              ),
+                              items: ['1m', '5m', '15m', '1h']
+                                  .map((x) => DropdownMenuItem(
+                                      value: x, child: Text(x)))
+                                  .toList(),
+                              onChanged: loading
+                                  ? null
+                                  : (v) {
+                                      setState(
+                                          () => timeframe = v ?? timeframe);
+                                      if (realtime != null) {
+                                        realtime!.timeframe = duration;
+                                      }
+                                    },
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: FilledButton.icon(
+                              onPressed: loading ? null : scan,
+                              icon: const Icon(Icons.radar),
+                              label: Text(
+                                  loading ? '...' : (en ? 'Scan' : 'اسکن')),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (liveOn)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            en
+                                ? (preferFutures
+                                    ? 'LIVE + FUTURES mode — gate requires paper sample'
+                                    : 'LIVE + SPOT mode — gate requires paper sample')
+                                : (preferFutures
+                                    ? 'زنده + فیوچرز — گیت نیاز به نمونه پیپر دارد'
+                                    : 'زنده + اسپات — گیت نیاز به نمونه پیپر دارد'),
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              if (signals.isNotEmpty) ...[
+                Text(
+                  en
+                      ? 'Opportunities ($marketCount)'
+                      : 'فرصت‌ها ($marketCount)',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                ...signals.take(10).map(
+                      (s) => Card(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: Text('${s.symbol} ${s.side}'),
+                                subtitle: Text(
+                                  'E=${money(s.entry)} SL=${money(s.stopLoss)} '
+                                  'TP1=${money(s.tp1)} RR=1:${s.riskReward.toStringAsFixed(1)}\n'
+                                  'conf=${s.confidence.toStringAsFixed(0)}',
+                                ),
+                                isThreeLine: true,
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      tooltip: en ? 'Chart' : 'نمودار',
+                                      onPressed: () => _openChart(s),
+                                      icon: const Icon(Icons.show_chart),
+                                    ),
+                                    IconButton(
+                                      tooltip: en ? 'AI' : 'تحلیل',
+                                      onPressed: () => analyzeWithAi(s),
+                                      icon: const Icon(Icons.psychology),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              FilledButton.icon(
+                                onPressed: () => placeOnPhone(s, isOpen: true),
+                                icon: Icon(
+                                  preferFutures
+                                      ? Icons.candlestick_chart
+                                      : Icons.shopping_cart_checkout,
+                                ),
+                                label: Text(
+                                  _openButtonLabel(s, en),
+                                  textAlign: TextAlign.center,
+                                ),
+                                style: FilledButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 12,
+                                    horizontal: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+              ],
+              if (selectedForAi != null || aiLoading || aiError != null)
+                Card(
+                  child: ListTile(
+                    title: Text(en ? 'AI' : 'تحلیل'),
+                    subtitle: Text(aiLoading
+                        ? '...'
+                        : (aiError ??
+                            (aiAnalysis?.summary ??
+                                selectedForAi?.symbol ??
+                                ''))),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
