@@ -12,12 +12,13 @@ void main() {
   });
 
   test('fingerprint is stable for same signal band', () {
-    // entry band uses (entry * 100).round() — micro noise within 0.005 must match
+    // entry band uses (entry * 100).round()
+    // 150.12 and 150.124 both → 15012
     final a = MarketSignal(
       symbol: 'SOLUSDT',
       side: 'LONG',
       timeframe: '15m',
-      entry: 150.124,
+      entry: 150.12,
       stopLoss: 145,
       tp1: 160,
       tp2: 165,
@@ -31,7 +32,7 @@ void main() {
       symbol: 'SOLUSDT',
       side: 'LONG',
       timeframe: '15m',
-      entry: 150.126,
+      entry: 150.124,
       stopLoss: 145,
       tp1: 160,
       tp2: 165,
@@ -42,6 +43,6 @@ void main() {
       timestamp: DateTime.utc(2026, 1, 1),
     );
     expect(SpotAutoTrader.fingerprintOf(a), SpotAutoTrader.fingerprintOf(b));
-    expect(SpotAutoTrader.fingerprintOf(a), startsWith('SOLUSDT:LONG:90:'));
+    expect(SpotAutoTrader.fingerprintOf(a), 'SOLUSDT:LONG:90:15012');
   });
 }
