@@ -1,0 +1,79 @@
+oute(
+                  builder: (_) => TradeSettingsPage(english: en),
+                ));
+                await _refreshTradeStatus();
+              },
+              icon: const Icon(Icons.settings_outlined),
+            ),
+            IconButton(
+              onPressed: widget.onTheme,
+              icon: Icon(widget.dark ? Icons.light_mode : Icons.dark_mode),
+            ),
+            IconButton(
+                onPressed: widget.onLang, icon: const Icon(Icons.language)),
+            IconButton(
+                onPressed: widget.onLogout, icon: const Icon(Icons.logout)),
+          ],
+        ),
+        body: RefreshIndicator(
+          onRefresh: scan,
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              Card(
+                color: tabdealLinked
+                    ? Colors.green.withOpacity(0.08)
+                    : Colors.orange.withOpacity(0.08),
+                child: ListTile(
+                  onTap: _openDiagnose,
+                  leading: checkingLink
+                      ? const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(
+                          tabdealLinked ? Icons.link : Icons.link_off,
+                          color: tabdealLinked ? Colors.green : Colors.orange,
+                        ),
+                  title: Text(checkingLink
+                      ? (en ? 'Checking...' : 'در حال تست...')
+                      : (tabdealLinked
+                          ? (en ? 'Tabdeal connected' : 'تبدیل متصل')
+                          : (en ? 'Tabdeal offline' : 'تبدیل قطع'))),
+                  subtitle: Text(status ?? ''),
+                ),
+              ),
+              if (realtimeOn)
+                Card(
+                  color: Colors.blue.withOpacity(0.08),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          en ? 'AUTO MARKET MONITOR' : 'پایش خودکار بازار',
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(realtimeLabel.isEmpty
+                            ? (en ? 'MONITORING' : 'پایش')
+                            : realtimeLabel),
+                        if (tvStatusLabel.isNotEmpty)
+                          Text(
+                            tvStatusLabel,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        if (realtime != null) ...[
+                          Text(
+                            en
+                                ? 'Scanned: ${realtime!.lastScannedCount} markets'
+                                : 'اسکن‌شده: ${realtime!.lastScannedCount} بازار',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          if (realtime!.lastSuccess != null)
+                            Text(
