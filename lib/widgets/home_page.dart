@@ -27,6 +27,7 @@ import '../services/tabdeal_api.dart';
 import '../services/tabdeal_trade.dart';
 import 'account_page.dart';
 import 'ai_performance_page.dart';
+import 'coin_analysis_page.dart';
 import 'connection_diagnose_page.dart';
 import 'market_chart_page.dart';
 import 'trade_settings_page.dart';
@@ -38,6 +39,7 @@ class HomePage extends StatefulWidget {
   final bool english, dark;
   final String? aiUsername, aiPassword;
   final VoidCallback onLang, onTheme, onLogout;
+
   /// Optional FCM / cold-start payload. Never auto-orders.
   final FcmOpportunityPayload? pendingPush;
   const HomePage({
@@ -285,9 +287,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             // ignore: discarded_futures
             androidNotify.showOpportunity(
               id: s.symbol.hashCode & 0x7fffffff,
-              title: widget.english
-                  ? 'SignalYab opportunity'
-                  : 'فرصت سیگنال‌یاب',
+              title:
+                  widget.english ? 'SignalYab opportunity' : 'فرصت سیگنال‌یاب',
               body: body,
               payload: AndroidNotificationService.payloadFor(
                 symbol: s.symbol,
@@ -401,9 +402,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
     final started = DateTime.now();
     try {
-      final preferFutures =
-          (await SharedPreferences.getInstance()).getBool('prefer_futures_execution') ??
-              false;
+      final preferFutures = (await SharedPreferences.getInstance())
+              .getBool('prefer_futures_execution') ??
+          false;
       final result = await scanner.scanAll(
         timeframe: duration,
         maxConcurrency: 8,
@@ -861,6 +862,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               icon: const Icon(Icons.analytics_outlined),
             ),
             IconButton(
+              tooltip: en ? 'Coin analysis' : 'تحلیل ارز',
+              onPressed: () {
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => CoinAnalysisPage(english: en),
+                ));
+              },
+              icon: const Icon(Icons.search),
+            ),
+            IconButton(
               tooltip: en ? 'Wallet' : 'کیف پول',
               onPressed: () {
                 Navigator.of(context).push(MaterialPageRoute(
@@ -984,9 +994,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           )
                         else ...[
                           Text(
-                            en
-                                ? '⭐ Best opportunity'
-                                : '⭐ بهترین فرصت بازار',
+                            en ? '⭐ Best opportunity' : '⭐ بهترین فرصت بازار',
                             style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
                           Text(

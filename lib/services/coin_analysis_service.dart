@@ -6,8 +6,6 @@ import '../models/market_data.dart';
 import 'binance_public.dart';
 import 'chart_indicators.dart';
 import 'fa_labels.dart';
-import 'market_analysis_engine.dart';
-import 'market_regime.dart';
 import 'quant_signal_engine.dart';
 import 'scanner_service.dart';
 import 'tabdeal_api.dart';
@@ -170,8 +168,7 @@ class CoinAnalysisResult {
       trendMidFa: '—',
       trendMainFa: '—',
       lastPrice: (j['price'] as num?)?.toDouble(),
-      analyzedAt:
-          DateTime.tryParse('${j['at'] ?? ''}') ?? DateTime.now(),
+      analyzedAt: DateTime.tryParse('${j['at'] ?? ''}') ?? DateTime.now(),
       dataAgeSeconds: 0,
       dataStale: false,
       dataInsufficient: false,
@@ -436,11 +433,11 @@ class CoinAnalysisService {
       );
     }
 
-    final lastTradeMs = trades
-        .map((t) => t.timestampMs)
-        .reduce((a, b) => a > b ? a : b);
-    final ageSec =
-        ((now.millisecondsSinceEpoch - lastTradeMs) / 1000).round().clamp(0, 99999);
+    final lastTradeMs =
+        trades.map((t) => t.timestampMs).reduce((a, b) => a > b ? a : b);
+    final ageSec = ((now.millisecondsSinceEpoch - lastTradeMs) / 1000)
+        .round()
+        .clamp(0, 99999);
     final stale = ageSec > staleSeconds;
 
     final c5 = scanner.buildCandles(trades, const Duration(minutes: 5));
@@ -467,9 +464,8 @@ class CoinAnalysisService {
     final primary = c1h.length >= 20
         ? c1h
         : (c15.length >= 20 ? c15 : (c5.length >= 15 ? c5 : c1h));
-    final lastPrice = primary.isNotEmpty
-        ? primary.last.close
-        : trades.last.price;
+    final lastPrice =
+        primary.isNotEmpty ? primary.last.close : trades.last.price;
 
     final regimeSnap = primary.length >= 40
         ? regime.detect(primary)
@@ -493,9 +489,7 @@ class CoinAnalysisService {
     final provisional = MarketSignal(
       symbol: symbol,
       side: provisionalSide == 'WAIT' ? 'LONG' : provisionalSide,
-      timeframe: primary == c1h
-          ? '1h'
-          : (primary == c15 ? '15m' : '5m'),
+      timeframe: primary == c1h ? '1h' : (primary == c15 ? '15m' : '5m'),
       entry: lastPrice,
       stopLoss: provisionalSide == 'SHORT'
           ? lastPrice + stopDist
@@ -534,9 +528,12 @@ class CoinAnalysisService {
       qd = null;
     }
 
-    final activeBiases =
-        tfs.where((t) => t.available && t.bias != 'NEUTRAL').map((t) => t.bias).toSet();
-    final conflict = activeBiases.contains('LONG') && activeBiases.contains('SHORT');
+    final activeBiases = tfs
+        .where((t) => t.available && t.bias != 'NEUTRAL')
+        .map((t) => t.bias)
+        .toSet();
+    final conflict =
+        activeBiases.contains('LONG') && activeBiases.contains('SHORT');
 
     double score = qd?.score ?? 40;
     int confidence = qd?.confidence ?? score.round();
@@ -600,7 +597,8 @@ class CoinAnalysisService {
     final reasons = <String>[];
     reasons.add('روند کوتاه‌مدت: ${_trendFa(tf5.bias)}');
     reasons.add('روند میان‌مدت: ${_trendFa(tf1h.bias)}');
-    reasons.add('روند اصلی: ${_trendFa(tf4h.available ? tf4h.bias : tf1h.bias)}');
+    reasons
+        .add('روند اصلی: ${_trendFa(tf4h.available ? tf4h.bias : tf1h.bias)}');
     reasons.add('وضعیت بازار: ${_regimeFa(regimeSnap.regime)}');
     if (qd != null) {
       for (final r in FaLabels.reasons(qd.reasons.take(6))) {
@@ -636,10 +634,10 @@ class CoinAnalysisService {
         tp2 = isLong ? lastPrice + atr * 3 : lastPrice - atr * 3;
         tp3 = isLong ? lastPrice + atr * 4.5 : lastPrice - atr * 4.5;
         final risk = (lastPrice - (sl)).abs();
-        final reward = ((tp2 ?? lastPrice) - lastPrice).abs();
+        final reward = (tp2 - lastPrice).abs();
         rr = risk > 0 ? reward / risk : 0;
       }
-      if (rr != null && rr < 1.2) {
+      if (rr < 1.2) {
         noTrade.add('نسبت سود به زیان ضعیف');
         reasons.add('ورود توصیه نمی‌شود (R/R ضعیف)');
       }
@@ -706,8 +704,8 @@ class CoinAnalysisService {
       final list = jsonDecode(raw) as List<dynamic>;
       return list
           .whereType<Map>()
-          .map((e) => CoinAnalysisResult.fromHistoryJson(
-              Map<String, dynamic>.from(e)))
+          .map((e) =>
+              CoinAnalysisResult.fromHistoryJson(Map<String, dynamic>.from(e)))
           .whereType<CoinAnalysisResult>()
           .toList();
     } catch (_) {
@@ -720,7 +718,8 @@ class CoinAnalysisService {
     final existing = await loadHistory();
     final next = [
       r,
-      ...existing.where((e) => e.symbol != r.symbol || e.analyzedAt != r.analyzedAt),
+      ...existing
+          .where((e) => e.symbol != r.symbol || e.analyzedAt != r.analyzedAt),
     ].take(maxHistory).toList();
     await p.setString(
       _historyKey,
