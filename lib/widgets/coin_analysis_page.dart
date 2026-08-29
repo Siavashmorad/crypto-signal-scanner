@@ -66,9 +66,10 @@ class _CoinAnalysisPageState extends State<CoinAnalysisPage> {
   void _setAutoRefresh(bool on) {
     _autoTimer?.cancel();
     setState(() => _autoRefresh = on);
-    if (on && _result != null) {
+    if (on) {
       _autoTimer = Timer.periodic(Duration(seconds: _autoSeconds), (_) {
         if (_result != null) _analyze(_result!.symbol, silent: true);
+        _loadRadar();
       });
     }
   }
@@ -218,6 +219,8 @@ class _CoinAnalysisPageState extends State<CoinAnalysisPage> {
               const SizedBox(height: 16),
               _watchlistSection(),
               const SizedBox(height: 16),
+              _bestOpportunityCard(),
+              const SizedBox(height: 16),
               _radarSection(),
               const SizedBox(height: 16),
               _historySection(),
@@ -308,6 +311,16 @@ class _CoinAnalysisPageState extends State<CoinAnalysisPage> {
               r.tierFa,
               style: TextStyle(color: color, fontWeight: FontWeight.w600),
             ),
+            const SizedBox(height: 4),
+            Text(
+              'اسپات: ${r.decision.spotActionFa}',
+              style: TextStyle(
+                color: r.decision == CoinDecision.buy
+                    ? Colors.green
+                    : Colors.orange.shade800,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             const Divider(height: 24),
             _kv('امتیاز تحلیل', '${r.score.toStringAsFixed(0)} / ۱۰۰'),
             _kv('اطمینان تحلیل', '${r.confidence}٪'),
@@ -316,6 +329,7 @@ class _CoinAnalysisPageState extends State<CoinAnalysisPage> {
             _kv('روند اصلی', r.trendMainFa),
             _kv('وضعیت بازار', r.regimeFa),
             if (r.lastPrice != null) _kv('قیمت', _fmtPrice(r.lastPrice)),
+            _kv('وضعیت داده', _dataStatusFa(r)),
             _kv('آخرین به‌روزرسانی', _fmtTime(r.analyzedAt)),
             _kv('سن داده', '${r.dataAgeSeconds} ثانیه'),
             if (r.conflictAcrossTf)
@@ -379,6 +393,14 @@ class _CoinAnalysisPageState extends State<CoinAnalysisPage> {
   }
 
   Widget _whyCard(CoinAnalysisResult r) {
+    if (r.reasonsFa.isEmpty) {
+      return Card(
+        child: ListTile(
+          title: const Text('چرا این تحلیل؟'),
+          subtitle: const Text('دلیل محاسبه‌شده‌ای ثبت نشد.'),
+        ),
+      );
+    }
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -388,21 +410,18 @@ class _CoinAnalysisPageState extends State<CoinAnalysisPage> {
             Text('چرا این تحلیل؟',
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
-            if (r.reasonsFa.isEmpty)
-              const Text('دلیل محاسبه‌شده‌ای ثبت نشد.')
-            else
-              ...r.reasonsFa.map(
-                (e) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('• '),
-                      Expanded(child: Text(e)),
-                    ],
-                  ),
+            ...r.reasonsFa.map(
+              (e) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('✓ '),
+                    Expanded(child: Text(e)),
+                  ],
                 ),
               ),
+            ),
           ],
         ),
       ),
@@ -570,6 +589,81 @@ class _CoinAnalysisPageState extends State<CoinAnalysisPage> {
     );
   }
 
+  String _dataStatusFa(CoinAnalysisResult r) {
+    if (r.dataInsufficient) return '🔴 قطع / داده ناکافی';
+    if (r.dataStale) return '🟡 قدیمی';
+    if (r.dataAgeSeconds > 120) return '🟡 قدیمی';
+    return '🟢 زنده';
+  }
+
+  String _confidenceFa(double score) {
+    if (score >= 90) return 'بسیار بالا';
+    if (score >= 80) return 'زیاد';
+    if (score >= 70) return 'متوسط';
+    if (score >= 60) return 'کم';
+    return 'ضعیف';
+  }
+
+  Widget _bestOpportunityCard() {
+    final best = _radar.isEmpty ? null : _radar.first;
+    return Card(
+      color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.35),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '🔥 بهترین فرصت فعلی',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            if (best == null)
+              const Text('در حال حاضر فرصت برجسته‌ای در رادار نیست')
+            else ...[
+              Text(
+                best.symbol.replaceAll('USDT', ' / USDT'),
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'امتیاز: ${best.confidence.toStringAsFixed(0)}/100 — ${FaLabels.scoreTier(best.confidence)}',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              Text('اعتماد: ${_confidenceFa(best.confidence)}'),
+              Text('جهت: ${FaLabels.spotSide(best.side)}'),
+              Text('بازه: ${best.timeframe}'),
+              if (best.entry > 0) Text('ورود: ${_fmtPrice(best.entry)}'),
+              if (best.stopLoss > 0) Text('حد ضرر: ${_fmtPrice(best.stopLoss)}'),
+              if (best.tp1 > 0) Text('هدف: ${_fmtPrice(best.tp1)}'),
+              const SizedBox(height: 6),
+              const Text(
+                'دلایل (خلاصه رادار):',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              Text('✓ امتیاز بالا در اسکن چندنمادی'),
+              Text('✓ ${FaLabels.spotSide(best.side)} در زمینه اسپات'),
+              if (best.riskReward >= 1.2)
+                Text('✓ نسبت سود/زیان ≈ ${best.riskReward.toStringAsFixed(1)}'),
+              Text('✓ آخرین به‌روزرسانی: ${_fmtTime(best.timestamp)}'),
+              const SizedBox(height: 8),
+              const Text(
+                'تحلیل فرصت — نه توصیه قطعی و نه سیگنال اجرای خودکار',
+                style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic),
+              ),
+              TextButton(
+                onPressed: () => _analyze(best.symbol),
+                child: const Text('مشاهده تحلیل کامل'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _radarSection() {
     return Card(
       child: Padding(
@@ -580,7 +674,7 @@ class _CoinAnalysisPageState extends State<CoinAnalysisPage> {
             Row(
               children: [
                 Expanded(
-                  child: Text('رادار فرصت‌ها',
+                  child: Text('رادار فرصت‌های بازار',
                       style: Theme.of(context).textTheme.titleMedium),
                 ),
                 if (_radarLoading)
@@ -591,6 +685,13 @@ class _CoinAnalysisPageState extends State<CoinAnalysisPage> {
                   ),
               ],
             ),
+            const SizedBox(height: 4),
+            Text(
+              _autoRefresh
+                  ? 'بروزرسانی خودکار: روشن (هر $_autoSeconds ثانیه)'
+                  : 'بروزرسانی خودکار: خاموش',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
             const SizedBox(height: 8),
             if (_radar.isEmpty && !_radarLoading)
               const Text('⛔ فعلاً فرصت مناسبی وجود ندارد')
@@ -600,7 +701,7 @@ class _CoinAnalysisPageState extends State<CoinAnalysisPage> {
                 final s = e.value;
                 final score = s.confidence;
                 final tier = FaLabels.scoreTier(score);
-                final side = FaLabels.side(s.side);
+                final side = FaLabels.spotSide(s.side);
                 return ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
