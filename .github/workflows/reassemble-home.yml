@@ -1,0 +1,41 @@
+name: Reassemble HomePage safely
+on:
+  push:
+    branches: [feat/futures-wallet-execution]
+permissions:
+  contents: write
+jobs:
+  reassemble:
+    if: ${{ contains(github.event.head_commit.message, '[home-chunk]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/futures-wallet-execution
+          fetch-depth: 0
+      - name: Reassemble exact HomePage
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in recovery/home_chunk1.txt recovery/home_chunk2.txt recovery/home_chunk3.txt; do
+            test -f "$f"
+          done
+          cat recovery/home_chunk1.txt recovery/home_chunk2.txt recovery/home_chunk3.txt > lib/widgets/home_page.dart
+          test "$(wc -c < lib/widgets/home_page.dart)" -eq 44793
+          test "$(sha256sum lib/widgets/home_page.dart | awk '{print $1}')" = "5dd7d2a4d3855c31ad16bb250f9909295c210a78c23f090a034f9e765b0e43c2"
+          grep -q "SpotAutoTrader" lib/widgets/home_page.dart
+          grep -q "CoinAnalysisPage" lib/widgets/home_page.dart
+          grep -q "FaLabels" lib/widgets/home_page.dart
+          grep -q "preferSpot" lib/widgets/home_page.dart
+          grep -q "PaperJournalResolver" lib/widgets/home_page.dart
+          ! grep -Eq 'PLACEHOLDER|LOADING_FROM_ARTIFACT|TRUNCATED|channel truncated' lib/widgets/home_page.dart
+      - name: Commit exact file and clean recovery chunks
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f recovery/home_chunk1.txt recovery/home_chunk2.txt recovery/home_chunk3.txt .github/workflows/reassemble-home.yml
+          git add lib/widgets/home_page.dart recovery .github/workflows/reassemble-home.yml
+          git commit -m "fix: restore exact HomePage with Coin Analysis [skip ci]"
+          git push origin feat/futures-wallet-execution
