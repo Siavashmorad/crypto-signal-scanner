@@ -20,6 +20,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+
           p = Path('lib/services/coin_analysis_service.dart')
           s = p.read_text()
           s = s.replace("import 'market_analysis_engine.dart';\n", '')
@@ -30,48 +31,37 @@ jobs:
 
           p = Path('lib/widgets/home_page.dart')
           s = p.read_text()
-          if "import 'coin_analysis_page.dart';" not in s:
+          import_line = "import 'coin_analysis_page.dart';\n"
+          if import_line not in s:
               marker = "import 'ai_performance_page.dart';\n"
               if marker not in s:
                   raise SystemExit('HomePage import anchor not found')
-              s = s.replace(marker, marker + "import 'coin_analysis_page.dart';\n", 1)
-          # Add a dedicated analysis action without replacing the existing AI action.
-          if 'CoinAnalysisPage()' not in s:
-              anchor = "Icons.analytics_outlined"
-              i = s.find(anchor)
-              if i < 0:
-                  raise SystemExit('HomePage analytics icon anchor not found')
-              start = s.rfind('IconButton', 0, i)
-              if start < 0:
-                  raise SystemExit('HomePage IconButton anchor not found')
-              end = s.find('),', i)
-              if end < 0:
-                  raise SystemExit('HomePage IconButton end not found')
-              end += 2
-              block = s[start:end]
-              # Reuse the existing IconButton block, changing only icon/route/title where possible.
-              new_block = block.replace('Icons.analytics_outlined', 'Icons.search', 1)
-              new_block = new_block.replace('AiPerformancePage()', 'CoinAnalysisPage()', 1)
-              if new_block == block:
-                  raise SystemExit('Could not derive Coin Analysis action from analytics button')
-              s = s[:end] + '\n' + new_block + s[end:]
+              s = s.replace(marker, marker + import_line, 1)
+
+          old = """            IconButton(\n              onPressed: () {\n                Navigator.of(context).push(MaterialPageRoute(\n                  builder: (_) => AiPerformancePage(english: en),\n                ));\n              },\n              icon: const Icon(Icons.analytics_outlined),\n            ),\n"""
+          new = old + """            IconButton(\n              tooltip: en ? 'Coin analysis' : 'تحلیل ارز',\n              onPressed: () {\n                Navigator.of(context).push(MaterialPageRoute(\n                  builder: (_) => CoinAnalysisPage(english: en),\n                ));\n              },\n              icon: const Icon(Icons.search),\n            ),\n"""
+          if 'CoinAnalysisPage(' not in s:
+              if old not in s:
+                  raise SystemExit('HomePage analytics button anchor not found')
+              s = s.replace(old, new, 1)
           p.write_text(s)
           PY
           dart format lib/services/coin_analysis_service.dart lib/widgets/home_page.dart
           grep -q "import 'coin_analysis_page.dart';" lib/widgets/home_page.dart
-          grep -q 'CoinAnalysisPage()' lib/widgets/home_page.dart
+          grep -q 'CoinAnalysisPage(' lib/widgets/home_page.dart
           ! grep -E 'PLACEHOLDER|LOADING_FROM_ARTIFACT|TRUNCATED|channel truncated' lib/widgets/home_page.dart
       - name: Verify and test
         run: |
           flutter pub get
           flutter analyze --no-fatal-infos
           flutter test
-      - name: Commit repair
+      - name: Commit repair and remove temporary workflow
         shell: bash
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add lib/services/coin_analysis_service.dart lib/widgets/home_page.dart
+          git rm .github/workflows/auto_repair_coin_analysis.yml
           git diff --cached --quiet && exit 0
           git commit -m "fix: connect Coin Analysis tab and clear analyzer blockers"
           git push origin HEAD:feat/futures-wallet-execution
