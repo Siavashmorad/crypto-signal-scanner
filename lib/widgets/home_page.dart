@@ -1,1 +1,3 @@
-RESTORE_FROM_LOCAL_FILE
+/// Home shell — implementation in home_page_impl.dart
+library;
+export 'home_page_impl.dart';
