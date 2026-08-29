@@ -4,13 +4,19 @@ import 'signal_journal.dart';
 class GateDecision {
   final bool allowLive;
   final String reason;
+  final String reasonEn;
   final bool paperOnly;
 
   const GateDecision({
     required this.allowLive,
     required this.reason,
+    this.reasonEn = '',
     this.paperOnly = false,
   });
+
+  /// User-facing text for current UI language.
+  String text({required bool english}) =>
+      english ? (reasonEn.isNotEmpty ? reasonEn : reason) : reason;
 }
 
 /// Statistical live gate — does not invent edge; defaults to paper when unknown.
@@ -34,14 +40,16 @@ class LiveTradingGate {
     if (!userLiveEnabled) {
       return const GateDecision(
         allowLive: false,
-        reason: 'User LIVE toggle off',
+        reason: 'سفارش واقعی خاموش است — فقط معاملات آزمایشی',
+        reasonEn: 'User LIVE toggle off',
         paperOnly: true,
       );
     }
     if (!dataHealthy) {
       return const GateDecision(
         allowLive: false,
-        reason: 'Market data not LIVE',
+        reason: 'داده بازار زنده نیست — قفل معامله واقعی',
+        reasonEn: 'Market data not LIVE',
         paperOnly: true,
       );
     }
@@ -53,6 +61,10 @@ class LiveTradingGate {
       return GateDecision(
         allowLive: false,
         reason:
+            'قفل معامله زنده: نمونه آزمایشی کافی نیست '
+            '(n=${paper.sample}، حداقل $minSample لازم است). '
+            'ثبت آزمایشی ادامه دارد.',
+        reasonEn:
             'LIVE GATE DISABLED: ${paper.note}. Paper recording continues.',
         paperOnly: true,
       );
@@ -62,6 +74,9 @@ class LiveTradingGate {
       return GateDecision(
         allowLive: false,
         reason:
+            'قفل معامله زنده: امیدریاضی معاملات آزمایشی '
+            '${paper.expectancyR.toStringAsFixed(2)}R کمتر از ${minExpectancyR}R است.',
+        reasonEn:
             'LIVE GATE DISABLED: paper expectancy ${paper.expectancyR.toStringAsFixed(2)}R < ${minExpectancyR}R',
         paperOnly: true,
       );
@@ -72,16 +87,19 @@ class LiveTradingGate {
       return GateDecision(
         allowLive: false,
         reason:
+            'کیفیت $quality برای سفارش واقعی تأیید نشده '
+            '(مجاز: ${allowedQ.join('، ')})',
+        reasonEn:
             'Quality $quality not validated for live (allowed: ${allowedQ.join(', ')})',
         paperOnly: true,
       );
     }
 
-    // Default: only A+ / A until data expands allowed set
     if (allowedQ.isEmpty && quality != 'A+' && quality != 'A') {
       return GateDecision(
         allowLive: false,
-        reason: 'Until quality buckets validated, live limited to A+/A',
+        reason: 'تا تأیید کیفیت‌ها، سفارش واقعی فقط برای A+/A',
+        reasonEn: 'Until quality buckets validated, live limited to A+/A',
         paperOnly: true,
       );
     }
@@ -90,14 +108,19 @@ class LiveTradingGate {
     if (weak.contains(regime)) {
       return GateDecision(
         allowLive: false,
-        reason: 'Regime $regime has negative measured expectancy',
+        reason: 'وضعیت بازار $regime امیدریاضی منفی دارد',
+        reasonEn: 'Regime $regime has negative measured expectancy',
         paperOnly: true,
       );
     }
 
     return GateDecision(
       allowLive: true,
-      reason: 'Gate OK · paper n=${paper.sample} E=${paper.expectancyR.toStringAsFixed(2)}R',
+      reason:
+          'گیت تأیید شد · نمونه آزمایشی n=${paper.sample} '
+          'E=${paper.expectancyR.toStringAsFixed(2)}R',
+      reasonEn:
+          'Gate OK · paper n=${paper.sample} E=${paper.expectancyR.toStringAsFixed(2)}R',
     );
   }
 }
