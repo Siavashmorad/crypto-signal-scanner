@@ -86,9 +86,8 @@ class SpotAutoTrader {
       // SPOT auto path: only LONG / buy. Bearish never becomes a short order.
       if (s.side.toUpperCase() != 'LONG') continue;
       if (s.entry <= 0 || s.stopLoss <= 0 || s.tp1 <= 0) continue;
-      final isLong = true;
-      if (isLong && s.stopLoss >= s.entry) continue;
-      if (!isLong && s.stopLoss <= s.entry) continue;
+      // LONG-only: stop must be below entry.
+      if (s.stopLoss >= s.entry) continue;
       final risk = (s.entry - s.stopLoss).abs();
       final reward = (s.tp1 - s.entry).abs();
       if (risk <= 0 || reward / risk < 1.2) continue;
@@ -117,9 +116,9 @@ class SpotAutoTrader {
     );
     if (!gateResult.allowLive) return null;
 
-    final isLong = best.side.toUpperCase() == 'LONG';
-    final side = isLong ? 'BUY' : 'SELL';
-    final isBuy = side == 'BUY';
+    // Already filtered to LONG above.
+    const side = 'BUY';
+    const isBuy = true;
 
     final client = TabdealTradeClient(
       apiKey: await tradeStore.apiKey(),
@@ -128,18 +127,14 @@ class SpotAutoTrader {
     try {
       final filters = await rules.filtersFor(best.symbol);
       final snap = await client.accountSnapshot();
-      final available = snap.available
-          ? (isBuy
-              ? snap.freeQuote(best.symbol)
-              : snap.freeBase(best.symbol))
-          : 0.0;
+      final available = snap.available ? snap.freeQuote(best.symbol) : 0.0;
       final configured = await tradeStore.defaultQty();
 
       final size = sizing.compute(
         filters: filters,
         configuredQty: configured,
         currentPrice: best.entry,
-        availableQuote: isBuy ? available : (available * best.entry),
+        availableQuote: available,
         riskPercent: 0.01,
         entry: best.entry,
         stopLoss: best.stopLoss,
