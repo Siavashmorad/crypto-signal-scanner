@@ -34,8 +34,13 @@ void main() {
       dataHealthy: true,
     );
     expect(d.allowLive, isFalse);
-    expect(d.reason.contains('DISABLED') || d.reason.contains('INSUFFICIENT'),
-        isTrue);
+    expect(
+      d.reason.contains('قفل') ||
+          d.reason.contains('نمونه') ||
+          d.reasonEn.contains('DISABLED') ||
+          d.reasonEn.contains('INSUFFICIENT'),
+      isTrue,
+    );
   });
 
   test('user live off → paper only', () {
