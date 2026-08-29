@@ -83,8 +83,10 @@ class SpotAutoTrader {
     MarketSignal? best;
     for (final s in ranked) {
       if (s.confidence < kAutoTradeMinScore) continue;
+      // SPOT auto path: only LONG / buy. Bearish never becomes a short order.
+      if (s.side.toUpperCase() != 'LONG') continue;
       if (s.entry <= 0 || s.stopLoss <= 0 || s.tp1 <= 0) continue;
-      final isLong = s.side.toUpperCase() == 'LONG';
+      final isLong = true;
       if (isLong && s.stopLoss >= s.entry) continue;
       if (!isLong && s.stopLoss <= s.entry) continue;
       final risk = (s.entry - s.stopLoss).abs();
