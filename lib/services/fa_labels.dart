@@ -17,6 +17,24 @@ class FaLabels {
     }
   }
 
+  /// SPOT opportunity wording — never present SHORT as actionable short entry.
+  static String spotSide(String s) {
+    switch (s.toUpperCase()) {
+      case 'LONG':
+      case 'BUY':
+        return 'خرید اسپات';
+      case 'SHORT':
+      case 'SELL':
+        return 'عدم خرید / انتظار';
+      case 'WAIT':
+        return 'انتظار';
+      case 'AVOID':
+        return 'عدم ورود';
+      default:
+        return s;
+    }
+  }
+
   static String scoreTier(double score) {
     if (score >= 90) return 'فرصت بسیار قوی';
     if (score >= 80) return 'فرصت قوی';

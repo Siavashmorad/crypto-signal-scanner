@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:crypto_signal_scanner/services/coin_analysis_service.dart';
+import 'package:crypto_signal_scanner/services/fa_labels.dart';
 import 'package:crypto_signal_scanner/services/tabdeal_api.dart';
 
 void main() {
@@ -33,9 +34,11 @@ void main() {
   });
 
   group('CoinDecisionFa', () {
-    test('labels are Persian', () {
+    test('labels are Persian and SPOT-safe', () {
       expect(CoinDecision.buy.label, contains('خرید'));
-      expect(CoinDecision.sell.label, contains('فروش'));
+      expect(CoinDecision.sell.label, contains('عدم خرید'));
+      expect(CoinDecision.sell.spotActionFa, contains('عدم خرید'));
+      expect(CoinDecision.buy.spotActionFa, contains('ورود'));
       expect(CoinDecision.wait.label, 'انتظار');
       expect(CoinDecision.noTrade.label, 'بدون معامله');
     });
@@ -73,6 +76,14 @@ void main() {
       expect(back.score, 92);
       expect(back.decision, CoinDecision.buy);
       expect(back.lastPrice, 65000);
+    });
+  });
+
+  group('FaLabels.spotSide', () {
+    test('LONG is buy, SHORT is wait for SPOT', () {
+      expect(FaLabels.spotSide('LONG'), 'خرید اسپات');
+      expect(FaLabels.spotSide('SHORT'), 'عدم خرید / انتظار');
+      expect(FaLabels.spotSide('BUY'), 'خرید اسپات');
     });
   });
 }
