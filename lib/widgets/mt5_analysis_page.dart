@@ -29,8 +29,10 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
   List<Mt5PositionSnapshot> _positions = const [];
   bool _loading = false;
   bool _connected = false;
+  bool _hasSavedSettings = false;
   String? _error;
   String _source = '';
+  DateTime? _lastUpdate;
 
   bool get en => widget.english;
 
@@ -43,21 +45,34 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
   Future<void> _loadSettings() async {
     final mode = await _store.mode;
     _mode = mode;
-    _url.text = await _store.bridgeUrl ?? '';
+    _url.text = await _store.bridgeUrl ?? 'https://crypto-signal-scanner-ryw9.onrender.com';
     _login.text = await _store.login ?? '';
+    _password.text = await _store.password ?? '';
     _token.text = await _store.metaApiToken ?? '';
     _accountId.text = await _store.metaApiAccountId ?? '';
     _region.text = await _store.metaApiRegion;
-    if (mounted) setState(() {});
+    final saved = _mode == 'metaapi'
+        ? _token.text.trim().isNotEmpty && _accountId.text.trim().isNotEmpty
+        : _url.text.trim().isNotEmpty &&
+            _login.text.trim().isNotEmpty &&
+            _password.text.isNotEmpty;
+    if (!mounted) return;
+    setState(() => _hasSavedSettings = saved);
+    if (saved) {
+      // Best-effort reconnect using credentials already stored securely.
+      await _connect(silent: true);
+    }
   }
 
-  Future<void> _connect() async {
+  Future<void> _connect({bool silent = false}) async {
     FocusScope.of(context).unfocus();
-    setState(() {
-      _loading = true;
-      _error = null;
-      _connected = false;
-    });
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+        _connected = false;
+      });
+    }
     try {
       if (_mode == 'metaapi') {
         await _connectMetaApi();
@@ -67,6 +82,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '$e');
+      if (!silent) _showError('$e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -75,8 +91,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
   Future<void> _connectMetaApi() async {
     final token = _token.text.trim();
     final accountId = _accountId.text.trim();
-    final region =
-        _region.text.trim().isEmpty ? 'new-york' : _region.text.trim();
+    final region = _region.text.trim().isEmpty ? 'new-york' : _region.text.trim();
     if (token.isEmpty || accountId.isEmpty) {
       throw Exception(en
           ? 'MetaAPI token and Account ID are required.'
@@ -94,11 +109,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
       }
       final account = await provider.account();
       final positions = await provider.positions();
-      await _store.saveMetaApi(
-        token: token,
-        accountId: accountId,
-        region: region,
-      );
+      await _store.saveMetaApi(token: token, accountId: accountId, region: region);
       _provider?.dispose();
       if (!mounted) return;
       setState(() {
@@ -106,7 +117,9 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
         _account = account;
         _positions = positions;
         _connected = true;
+        _hasSavedSettings = true;
         _source = 'MetaAPI ($region)';
+        _lastUpdate = DateTime.now();
       });
     } catch (e) {
       provider.dispose();
@@ -133,11 +146,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
       await provider.login(login: login, password: password);
       final account = await provider.account();
       final positions = await provider.positions();
-      await _store.saveBridge(
-        bridgeUrl: baseUrl,
-        login: login,
-        password: password,
-      );
+      await _store.saveBridge(bridgeUrl: baseUrl, login: login, password: password);
       _provider?.dispose();
       if (!mounted) return;
       setState(() {
@@ -145,7 +154,9 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
         _account = account;
         _positions = positions;
         _connected = true;
+        _hasSavedSettings = true;
         _source = 'Bridge';
+        _lastUpdate = DateTime.now();
       });
     } catch (e) {
       provider.dispose();
@@ -156,7 +167,10 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
   Future<void> _refresh() async {
     final provider = _provider;
     if (provider == null) return _connect();
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final account = await provider.account();
       final positions = await provider.positions();
@@ -165,7 +179,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
         _account = account;
         _positions = positions;
         _connected = true;
-        _error = null;
+        _lastUpdate = DateTime.now();
       });
     } catch (e) {
       if (!mounted) return;
@@ -176,6 +190,35 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _clearSaved() async {
+    await _store.clear();
+    _provider?.dispose();
+    _provider = null;
+    if (!mounted) return;
+    setState(() {
+      _token.clear();
+      _accountId.clear();
+      _region.text = 'new-york';
+      _url.text = 'https://crypto-signal-scanner-ryw9.onrender.com';
+      _login.clear();
+      _password.clear();
+      _account = null;
+      _positions = const [];
+      _connected = false;
+      _hasSavedSettings = false;
+      _source = '';
+      _lastUpdate = null;
+      _error = null;
+    });
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 5)),
+    );
   }
 
   @override
@@ -201,6 +244,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
             if (_connected)
               IconButton(
                 onPressed: _loading ? null : _refresh,
+                tooltip: en ? 'Refresh' : 'به‌روزرسانی',
                 icon: const Icon(Icons.refresh),
               ),
           ],
@@ -218,21 +262,26 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 ),
                 subtitle: Text(
                   _connected
-                      ? (en
-                          ? 'Read-only · $_source'
-                          : 'فقط‌خواندنی · $_source')
-                      : (en
-                          ? 'No live MT5 session'
-                          : 'جلسه زنده MT5 برقرار نیست'),
+                      ? (en ? 'Read-only · $_source' : 'فقط‌خواندنی · $_source')
+                      : (en ? 'No live MT5 session' : 'جلسه زنده MT5 برقرار نیست'),
                 ),
               ),
             ),
+            if (_lastUpdate != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                en
+                    ? 'Last update: ${_lastUpdate!.toLocal()}'
+                    : 'آخرین به‌روزرسانی: ${_lastUpdate!.toLocal()}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             const SizedBox(height: 8),
             SegmentedButton<String>(
               segments: [
                 ButtonSegment(
                   value: 'metaapi',
-                  label: Text(en ? 'MetaAPI' : 'MetaAPI'),
+                  label: const Text('MetaAPI'),
                   icon: const Icon(Icons.cloud),
                 ),
                 ButtonSegment(
@@ -246,16 +295,22 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 setState(() {
                   _mode = s.first;
                   _error = null;
+                  _connected = false;
                 });
               },
             ),
             const SizedBox(height: 12),
             if (_mode == 'metaapi') ...[
-              Text(
-                en
-                    ? 'Use token + Account ID from metaapi.cloud after you add your MT5 account there.'
-                    : 'توکن و شناسه حساب را از پنل metaapi.cloud بعد از افزودن حساب MT5 وارد کنید.',
-                style: Theme.of(context).textTheme.bodySmall,
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(
+                    en
+                        ? '1) Add your MT5 account in MetaAPI. 2) Copy the MetaAPI token and Account ID. 3) Enter them here. The credentials are stored only in Android secure storage.'
+                        : '۱) حساب MT5 را در MetaAPI اضافه کنید. ۲) توکن MetaAPI و Account ID را بردارید. ۳) اینجا وارد کنید. اطلاعات اتصال فقط در حافظه امن اندروید ذخیره می‌شود.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
               ),
               const SizedBox(height: 8),
               TextField(
@@ -263,6 +318,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 obscureText: true,
                 decoration: InputDecoration(
                   labelText: en ? 'MetaAPI token' : 'توکن MetaAPI',
+                  prefixIcon: const Icon(Icons.key),
                 ),
               ),
               const SizedBox(height: 10),
@@ -270,15 +326,15 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 controller: _accountId,
                 decoration: InputDecoration(
                   labelText: en ? 'Account ID (UUID)' : 'شناسه حساب (UUID)',
+                  prefixIcon: const Icon(Icons.badge_outlined),
                 ),
               ),
               const SizedBox(height: 10),
               TextField(
                 controller: _region,
                 decoration: InputDecoration(
-                  labelText: en
-                      ? 'Region (new-york, london, …)'
-                      : 'منطقه (new-york، london، …)',
+                  labelText: en ? 'Region (new-york, london, …)' : 'منطقه (new-york، london، …)',
+                  prefixIcon: const Icon(Icons.public),
                 ),
               ),
             ] else ...[
@@ -286,6 +342,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 controller: _url,
                 decoration: InputDecoration(
                   labelText: en ? 'Bridge URL' : 'آدرس پل MT5',
+                  prefixIcon: const Icon(Icons.link),
                 ),
                 keyboardType: TextInputType.url,
               ),
@@ -294,6 +351,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 controller: _login,
                 decoration: InputDecoration(
                   labelText: en ? 'MT5 Login' : 'شماره ورود MT5',
+                  prefixIcon: const Icon(Icons.person_outline),
                 ),
               ),
               const SizedBox(height: 10),
@@ -302,12 +360,13 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 obscureText: true,
                 decoration: InputDecoration(
                   labelText: en ? 'MT5 Password' : 'رمز عبور MT5',
+                  prefixIcon: const Icon(Icons.lock_outline),
                 ),
               ),
             ],
             const SizedBox(height: 14),
             FilledButton.icon(
-              onPressed: _loading ? null : _connect,
+              onPressed: _loading ? null : () => _connect(),
               icon: _loading
                   ? const SizedBox(
                       width: 18,
@@ -317,6 +376,12 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                   : const Icon(Icons.link),
               label: Text(en ? 'Connect read-only' : 'اتصال فقط‌خواندنی'),
             ),
+            if (_hasSavedSettings)
+              OutlinedButton.icon(
+                onPressed: _loading ? null : _clearSaved,
+                icon: const Icon(Icons.delete_outline),
+                label: Text(en ? 'Clear saved connection' : 'پاک کردن اطلاعات اتصال'),
+              ),
             if (_error != null) ...[
               const SizedBox(height: 10),
               Card(
