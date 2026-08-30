@@ -31,10 +31,10 @@ class HomeNavSection extends StatelessWidget {
         Card(
           child: ListTile(
             leading: const Icon(Icons.show_chart),
-            title: Text(en ? 'MT5 Analysis' : 'تحلیل MT5'),
+            title: Text(en ? 'MT5 / MetaAPI' : 'MT5 / MetaAPI'),
             subtitle: Text(en
-                ? 'Analysis only — no order execution'
-                : 'فقط تحلیل — بدون اجرای سفارش'),
+                ? 'Save token & Account ID — read-only balance & positions'
+                : 'ذخیره توکن و شناسه حساب — موجودی و پوزیشن فقط‌خواندنی'),
             trailing: Icon(en ? Icons.chevron_right : Icons.chevron_left),
             onTap: () {
               Navigator.of(context).push(MaterialPageRoute(
