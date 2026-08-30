@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/background_monitor_service.dart';
 import '../services/local_trade_store.dart';
 import '../services/tabdeal_trade.dart';
