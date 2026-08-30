@@ -1,1 +1,128 @@
-LOAD_FROM_/tmp/crypto-signal-scanner/lib/widgets/home_page.dart
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../models/market_data.dart';
+import '../services/account_balance.dart';
+import '../services/ai_analyst.dart';
+import '../services/futures_execution_service.dart';
+import '../services/live_trading_gate.dart';
+import '../services/paper_journal_resolver.dart';
+import '../services/fa_labels.dart';
+import '../services/spot_auto_trader.dart';
+import '../services/local_trade_store.dart';
+import '../services/order_sizing.dart';
+import '../services/position_tracker.dart';
+import '../services/realtime_futures_scanner_service.dart';
+import '../services/android_notification_service.dart';
+import '../services/fcm_opportunity_payload.dart';
+import '../main.dart' show appPush;
+import '../services/push_open_handler.dart';
+import '../services/tradingview_signal_service.dart';
+import '../services/scanner_service.dart';
+import '../services/signal_cooldown.dart';
+import '../services/signal_journal.dart';
+import '../services/symbol_rules_service.dart';
+import '../services/tabdeal_api.dart';
+import '../services/tabdeal_trade.dart';
+import 'account_page.dart';
+import 'ai_performance_page.dart';
+import 'coin_analysis_page.dart';
+import 'connection_diagnose_page.dart';
+import 'market_chart_page.dart';
+import 'trade_settings_page.dart';
+import 'wallet_page.dart';
+
+const ownerUsername = 'Siavashmorad';
+
+class HomePage extends StatefulWidget {
+  final bool english, dark;
+  final String? aiUsername, aiPassword;
+  final VoidCallback onLang, onTheme, onLogout;
+
+  final FcmOpportunityPayload? pendingPush;
+  const HomePage({
+    super.key,
+    required this.english,
+    required this.dark,
+    required this.onLang,
+    required this.onTheme,
+    required this.onLogout,
+    this.aiUsername,
+    this.aiPassword,
+    this.pendingPush,
+  });
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  final api = TabdealApi();
+  late final scanner = ScannerService(api);
+  late final rules = SymbolRulesService(api);
+  final sizing = OrderSizingEngine();
+  final ai = AiAnalystService();
+  final tradeStore = LocalTradeStore();
+  final signalJournal = SignalJournal();
+  final signalCooldown = SignalCooldown();
+  final liveGate = LiveTradingGate();
+  RealtimeFuturesScannerService? realtime;
+  final tvSignals = TradingViewSignalService();
+  Timer? _tvPollTimer;
+  String tvStatusLabel = '';
+  final Map<String, Map<String, dynamic>> lastFills = {};
+  bool loading = false;
+  bool checkingLink = true;
+  bool tabdealLinked = false;
+  bool liveOn = false;
+  bool preferFutures = false;
+  bool realtimeOn = false;
+  bool realtimeNotify = true;
+  bool androidOsNotify = true;
+  late final AndroidNotificationService androidNotify;
+  final _pushHandler = PushOpenHandler();
+  StreamSubscription<FcmOpportunityPayload>? _pushSub;
+  bool _handlingPush = false;
+  String realtimeLabel = '';
+  String timeframe = '15m';
+  String? status;
+  List<MarketSignal> signals = [];
+  int marketCount = 0;
+  MarketSignal? selectedForAi;
+  AiAnalysis? aiAnalysis;
+  bool aiLoading = false;
+  String? aiError;
+
+  Duration get duration => switch (timeframe) {
+        '1m' => const Duration(minutes: 1),
+        '5m' => const Duration(minutes: 5),
+        '1h' => const Duration(hours: 1),
+        _ => const Duration(minutes: 15),
+      };
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    androidNotify = AndroidNotificationService(
+      onSelect: (payload) {
+        // ignore: discarded_futures
+        _onNotificationTap(payload);
+      },
+    );
+    // ignore: discarded_futures
+    androidNotify.init().then((_) => _handleLaunchFromNotification());
+    _pushSub = appPush.opportunityOpened.listen((p) {
+      // ignore: discarded_futures
+      _handleFcmOpportunity(p);
+    });
+    if (widget.pendingPush != null) {
+      // ignore: discarded_futures
+      Future.microtask(() => _handleFcmOpportunity(widget.pendingPush!));
+    }
+    _checkTabdeal();
+    _refreshTradeStatus();
+  }
+
+  // TRUNCATED_RESTORE_INCOMPLETE - DO NOT USE
+}
