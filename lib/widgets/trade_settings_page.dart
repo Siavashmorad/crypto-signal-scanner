@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/background_monitor_service.dart';
 import '../services/local_trade_store.dart';
 import '../services/tabdeal_trade.dart';
+import 'mt5_analysis_page.dart';
 
 class TradeSettingsPage extends StatefulWidget {
   final bool english;
@@ -105,6 +106,14 @@ class _TradeSettingsPageState extends State<TradeSettingsPage> {
             : ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
+                  Text(
+                    en ? 'Tabdeal (execution)' : 'تبدیل (اجرای سفارش)',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(16),
@@ -148,7 +157,8 @@ class _TradeSettingsPageState extends State<TradeSettingsPage> {
                     ),
                   ),
                   SwitchListTile(
-                    title: Text(en ? 'Enable LIVE orders' : 'فعال‌سازی سفارش واقعی'),
+                    title:
+                        Text(en ? 'Enable LIVE orders' : 'فعال‌سازی سفارش واقعی'),
                     subtitle: Text(en
                         ? 'Off = only signals. On = real money after Approve.'
                         : 'خاموش = فقط سیگنال. روشن = پول واقعی بعد از تأیید.'),
@@ -160,8 +170,8 @@ class _TradeSettingsPageState extends State<TradeSettingsPage> {
                         ? 'Background opportunity monitoring'
                         : 'پایش فرصت‌ها در پس‌زمینه'),
                     subtitle: Text(en
-                        ? 'Checks market periodically while the app is closed. Notifications only; never places orders.'
-                        : 'در حالت بسته بودن برنامه به‌صورت دوره‌ای بازار را بررسی می‌کند. فقط اعلان؛ هیچ سفارشی ثبت نمی‌کند.'),
+                        ? 'While the app process is alive: slower polls + alerts. Never places orders. Stops if OS force-stops the app.'
+                        : 'تا وقتی برنامه در حافظه زنده است: پایش کندتر + اعلان. هیچ سفارشی ثبت نمی‌کند. با Force-stop قطع می‌شود.'),
                     value: backgroundMonitor,
                     onChanged: (v) => setState(() => backgroundMonitor = v),
                   ),
@@ -173,7 +183,7 @@ class _TradeSettingsPageState extends State<TradeSettingsPage> {
                   FilledButton.icon(
                     onPressed: _save,
                     icon: const Icon(Icons.save),
-                    label: Text(en ? 'Save' : 'ذخیره'),
+                    label: Text(en ? 'Save Tabdeal settings' : 'ذخیره تنظیمات تبدیل'),
                   ),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
@@ -185,13 +195,40 @@ class _TradeSettingsPageState extends State<TradeSettingsPage> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.verified_user),
-                    label: Text(en ? 'Test connection' : 'تست اتصال حساب'),
+                    label: Text(en ? 'Test Tabdeal connection' : 'تست اتصال تبدیل'),
+                  ),
+                  const SizedBox(height: 24),
+                  Text(
+                    en ? 'MT5 (read-only analysis)' : 'MT5 (فقط تحلیل)',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.show_chart),
+                      title: Text(en
+                          ? 'MetaAPI / MT5 connection'
+                          : 'اتصال MetaAPI / MT5'),
+                      subtitle: Text(en
+                          ? 'Enter token + Account ID later. Read-only — no MT5 orders.'
+                          : 'توکن و شناسه حساب را بعداً وارد کنید. فقط‌خواندنی — بدون سفارش MT5.'),
+                      trailing:
+                          Icon(en ? Icons.chevron_right : Icons.chevron_left),
+                      onTap: () {
+                        Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => Mt5AnalysisPage(english: en),
+                        ));
+                      },
+                    ),
                   ),
                   const SizedBox(height: 16),
                   Text(
                     en
-                        ? 'Get API key from Tabdeal → Settings → API. Restrict IP if possible. Never share keys.'
-                        : 'کلید را از تبدیل → تنظیمات → API بگیرید. در صورت امکان IP محدود کنید. کلید را به کسی ندهید.',
+                        ? 'Get Tabdeal key from Tabdeal → Settings → API. Restrict IP if possible. Never share keys.'
+                        : 'کلید تبدیل را از تبدیل → تنظیمات → API بگیرید. در صورت امکان IP محدود کنید. کلید را به کسی ندهید.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
