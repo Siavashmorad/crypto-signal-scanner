@@ -1,13 +1,4 @@
-/// Optional MetaTrader 5 analysis/data provider.
-///
-/// MT5 is ANALYSIS ONLY.
-/// - Does NOT place Tabdeal orders.
-/// - Is NOT connected to SpotAutoTrader.
-/// - Is NOT required for the app to function.
-///
-/// Real MT5 connectivity typically needs an external bridge/backend.
-/// This file defines a clean interface + a disabled default implementation.
-library;
+import 'mt5_bridge_client.dart';
 
 /// OHLC bar from an external analysis source.
 class AnalysisBar {
@@ -28,7 +19,6 @@ class AnalysisBar {
   });
 }
 
-/// Optional external market-analysis provider (Tabdeal remains execution source).
 abstract class MarketAnalysisProvider {
   String get name;
   bool get isAvailable;
@@ -40,19 +30,28 @@ abstract class MarketAnalysisProvider {
   });
 }
 
-/// Disabled MT5 adapter — enable only when a real bridge is configured.
+/// Real read-only MT5 bridge provider. It has no order API by design.
 class Mt5AnalysisProvider implements MarketAnalysisProvider {
-  Mt5AnalysisProvider({this.bridgeBaseUrl});
+  Mt5AnalysisProvider({required this.client});
 
-  /// Optional bridge URL. When null/empty, provider stays unavailable.
-  final String? bridgeBaseUrl;
+  final Mt5BridgeClient client;
 
   @override
   String get name => 'MT5';
 
   @override
-  bool get isAvailable =>
-      bridgeBaseUrl != null && bridgeBaseUrl!.trim().isNotEmpty;
+  bool get isAvailable => true;
+
+  Future<bool> checkConnection() => client.health();
+
+  Future<void> login({required String login, required String password}) =>
+      client.authenticate(login: login, password: password);
+
+  Future<Mt5AccountSnapshot> account() => client.account();
+
+  Future<List<Mt5PositionSnapshot>> positions() => client.positions();
+
+  Future<List<String>> symbols() => client.symbols();
 
   @override
   Future<List<AnalysisBar>> fetchBars({
@@ -60,10 +59,18 @@ class Mt5AnalysisProvider implements MarketAnalysisProvider {
     required String timeframe,
     int limit = 100,
   }) async {
-    // No hard dependency / no order execution.
-    // Without a configured bridge, return empty so analysis continues on Tabdeal.
-    if (!isAvailable) return const [];
-    // Bridge integration is intentionally not implemented here.
-    return const [];
+    final bars = await client.bars(symbol: symbol, timeframe: timeframe, limit: limit);
+    return bars
+        .map((bar) => AnalysisBar(
+              time: bar.time,
+              open: bar.open,
+              high: bar.high,
+              low: bar.low,
+              close: bar.close,
+              volume: bar.volume,
+            ))
+        .toList(growable: false);
   }
+
+  void dispose() => client.dispose();
 }
