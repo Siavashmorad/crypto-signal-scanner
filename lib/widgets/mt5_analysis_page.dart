@@ -30,6 +30,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
   bool _loading = false;
   bool _connected = false;
   bool _hasSavedSettings = false;
+  String? _message;
   String? _error;
   String _source = '';
   DateTime? _lastUpdate;
@@ -45,7 +46,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
   Future<void> _loadSettings() async {
     final mode = await _store.mode;
     _mode = mode;
-    _url.text = await _store.bridgeUrl ?? 'https://crypto-signal-scanner-ryw9.onrender.com';
+    _url.text = await _store.bridgeUrl ?? '';
     _login.text = await _store.login ?? '';
     _password.text = await _store.password ?? '';
     _token.text = await _store.metaApiToken ?? '';
@@ -59,8 +60,54 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
     if (!mounted) return;
     setState(() => _hasSavedSettings = saved);
     if (saved) {
-      // Best-effort reconnect using credentials already stored securely.
       await _connect(silent: true);
+    }
+  }
+
+  Future<void> _saveOnly() async {
+    FocusScope.of(context).unfocus();
+    try {
+      if (_mode == 'metaapi') {
+        final token = _token.text.trim();
+        final accountId = _accountId.text.trim();
+        final region =
+            _region.text.trim().isEmpty ? 'new-york' : _region.text.trim();
+        if (token.isEmpty || accountId.isEmpty) {
+          throw Exception(en
+              ? 'MetaAPI token and Account ID are required to save.'
+              : 'برای ذخیره، توکن MetaAPI و شناسه حساب الزامی است.');
+        }
+        await _store.saveMetaApi(
+          token: token,
+          accountId: accountId,
+          region: region,
+        );
+      } else {
+        final baseUrl = _url.text.trim();
+        final login = _login.text.trim();
+        final password = _password.text;
+        if (baseUrl.isEmpty || login.isEmpty || password.isEmpty) {
+          throw Exception(en
+              ? 'Bridge URL, Login and Password are required to save.'
+              : 'برای ذخیره، آدرس پل، ورود و رمز الزامی است.');
+        }
+        await _store.saveBridge(
+          bridgeUrl: baseUrl,
+          login: login,
+          password: password,
+        );
+      }
+      if (!mounted) return;
+      setState(() {
+        _hasSavedSettings = true;
+        _message = en
+            ? 'Saved on this phone (secure storage)'
+            : 'روی این گوشی ذخیره شد (حافظه امن)';
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = '$e');
     }
   }
 
@@ -70,6 +117,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
       setState(() {
         _loading = true;
         _error = null;
+        _message = null;
         _connected = false;
       });
     }
@@ -79,6 +127,10 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
       } else {
         await _connectBridge();
       }
+      if (!mounted) return;
+      setState(() {
+        _message = en ? 'Connected (read-only)' : 'متصل شد (فقط‌خواندنی)';
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '$e');
@@ -91,7 +143,8 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
   Future<void> _connectMetaApi() async {
     final token = _token.text.trim();
     final accountId = _accountId.text.trim();
-    final region = _region.text.trim().isEmpty ? 'new-york' : _region.text.trim();
+    final region =
+        _region.text.trim().isEmpty ? 'new-york' : _region.text.trim();
     if (token.isEmpty || accountId.isEmpty) {
       throw Exception(en
           ? 'MetaAPI token and Account ID are required.'
@@ -109,7 +162,11 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
       }
       final account = await provider.account();
       final positions = await provider.positions();
-      await _store.saveMetaApi(token: token, accountId: accountId, region: region);
+      await _store.saveMetaApi(
+        token: token,
+        accountId: accountId,
+        region: region,
+      );
       _provider?.dispose();
       if (!mounted) return;
       setState(() {
@@ -146,7 +203,11 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
       await provider.login(login: login, password: password);
       final account = await provider.account();
       final positions = await provider.positions();
-      await _store.saveBridge(bridgeUrl: baseUrl, login: login, password: password);
+      await _store.saveBridge(
+        bridgeUrl: baseUrl,
+        login: login,
+        password: password,
+      );
       _provider?.dispose();
       if (!mounted) return;
       setState(() {
@@ -201,7 +262,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
       _token.clear();
       _accountId.clear();
       _region.text = 'new-york';
-      _url.text = 'https://crypto-signal-scanner-ryw9.onrender.com';
+      _url.clear();
       _login.clear();
       _password.clear();
       _account = null;
@@ -211,6 +272,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
       _source = '';
       _lastUpdate = null;
       _error = null;
+      _message = en ? 'Cleared' : 'پاک شد';
     });
   }
 
@@ -239,7 +301,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
       textDirection: en ? TextDirection.ltr : TextDirection.rtl,
       child: Scaffold(
         appBar: AppBar(
-          title: Text(en ? 'MT5 Read-only' : 'اتصال MT5'),
+          title: Text(en ? 'MT5 connection' : 'اتصال MT5'),
           actions: [
             if (_connected)
               IconButton(
@@ -262,8 +324,12 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 ),
                 subtitle: Text(
                   _connected
-                      ? (en ? 'Read-only · $_source' : 'فقط‌خواندنی · $_source')
-                      : (en ? 'No live MT5 session' : 'جلسه زنده MT5 برقرار نیست'),
+                      ? (en
+                          ? 'Read-only · $_source'
+                          : 'فقط‌خواندنی · $_source')
+                      : (en
+                          ? 'Enter credentials below (like Tabdeal API settings)'
+                          : 'اطلاعات را مثل API تبدیل اینجا وارد کنید'),
                 ),
               ),
             ),
@@ -306,8 +372,8 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                   padding: const EdgeInsets.all(12),
                   child: Text(
                     en
-                        ? '1) Add your MT5 account in MetaAPI. 2) Copy the MetaAPI token and Account ID. 3) Enter them here. The credentials are stored only in Android secure storage.'
-                        : '۱) حساب MT5 را در MetaAPI اضافه کنید. ۲) توکن MetaAPI و Account ID را بردارید. ۳) اینجا وارد کنید. اطلاعات اتصال فقط در حافظه امن اندروید ذخیره می‌شود.',
+                        ? '1) Create account on metaapi.cloud\n2) Add MT5 (prefer Investor password)\n3) Copy Token + Account ID + Region\n4) Save here, then Test connection\nCredentials stay only on this phone.'
+                        : '۱) در metaapi.cloud حساب بسازید\n۲) حساب MT5 را اضافه کنید (ترجیحاً رمز Investor)\n۳) Token و Account ID و Region را کپی کنید\n۴) اینجا ذخیره کنید، بعد تست اتصال بزنید\nاطلاعات فقط روی همین گوشی می‌ماند.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
@@ -318,6 +384,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 obscureText: true,
                 decoration: InputDecoration(
                   labelText: en ? 'MetaAPI token' : 'توکن MetaAPI',
+                  border: const OutlineInputBorder(),
                   prefixIcon: const Icon(Icons.key),
                 ),
               ),
@@ -326,6 +393,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 controller: _accountId,
                 decoration: InputDecoration(
                   labelText: en ? 'Account ID (UUID)' : 'شناسه حساب (UUID)',
+                  border: const OutlineInputBorder(),
                   prefixIcon: const Icon(Icons.badge_outlined),
                 ),
               ),
@@ -333,7 +401,10 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
               TextField(
                 controller: _region,
                 decoration: InputDecoration(
-                  labelText: en ? 'Region (new-york, london, …)' : 'منطقه (new-york، london، …)',
+                  labelText: en
+                      ? 'Region (new-york, london, …)'
+                      : 'منطقه (new-york، london، …)',
+                  border: const OutlineInputBorder(),
                   prefixIcon: const Icon(Icons.public),
                 ),
               ),
@@ -342,6 +413,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 controller: _url,
                 decoration: InputDecoration(
                   labelText: en ? 'Bridge URL' : 'آدرس پل MT5',
+                  border: const OutlineInputBorder(),
                   prefixIcon: const Icon(Icons.link),
                 ),
                 keyboardType: TextInputType.url,
@@ -351,6 +423,7 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 controller: _login,
                 decoration: InputDecoration(
                   labelText: en ? 'MT5 Login' : 'شماره ورود MT5',
+                  border: const OutlineInputBorder(),
                   prefixIcon: const Icon(Icons.person_outline),
                 ),
               ),
@@ -360,12 +433,24 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 obscureText: true,
                 decoration: InputDecoration(
                   labelText: en ? 'MT5 Password' : 'رمز عبور MT5',
+                  border: const OutlineInputBorder(),
                   prefixIcon: const Icon(Icons.lock_outline),
                 ),
               ),
             ],
             const SizedBox(height: 14),
+            if (_message != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(_message!),
+              ),
             FilledButton.icon(
+              onPressed: _loading ? null : _saveOnly,
+              icon: const Icon(Icons.save),
+              label: Text(en ? 'Save on this phone' : 'ذخیره روی این گوشی'),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
               onPressed: _loading ? null : () => _connect(),
               icon: _loading
                   ? const SizedBox(
@@ -373,15 +458,18 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Icon(Icons.link),
-              label: Text(en ? 'Connect read-only' : 'اتصال فقط‌خواندنی'),
+                  : const Icon(Icons.verified_user),
+              label: Text(en ? 'Test / Connect read-only' : 'تست / اتصال فقط‌خواندنی'),
             ),
-            if (_hasSavedSettings)
-              OutlinedButton.icon(
+            if (_hasSavedSettings) ...[
+              const SizedBox(height: 8),
+              TextButton.icon(
                 onPressed: _loading ? null : _clearSaved,
                 icon: const Icon(Icons.delete_outline),
-                label: Text(en ? 'Clear saved connection' : 'پاک کردن اطلاعات اتصال'),
+                label: Text(
+                    en ? 'Clear saved connection' : 'پاک کردن اطلاعات اتصال'),
               ),
+            ],
             if (_error != null) ...[
               const SizedBox(height: 10),
               Card(
@@ -438,8 +526,8 @@ class _Mt5AnalysisPageState extends State<Mt5AnalysisPage> {
                 padding: const EdgeInsets.all(12),
                 child: Text(
                   en
-                      ? 'MT5 is read-only: no order, modify or close. Tabdeal remains the execution path. Investor password is recommended on MetaAPI.'
-                      : 'MT5 فقط‌خواندنی است: ثبت/ویرایش/بستن سفارش ندارد. مسیر اجرا همچنان تبدیل است. در MetaAPI استفاده از رمز Investor توصیه می‌شود.',
+                      ? 'MT5 is read-only: no order, modify or close. Tabdeal remains the execution path.'
+                      : 'MT5 فقط‌خواندنی است: ثبت/ویرایش/بستن سفارش ندارد. مسیر اجرا همچنان تبدیل است.',
                 ),
               ),
             ),
