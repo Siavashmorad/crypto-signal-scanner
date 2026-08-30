@@ -1,4 +1,5 @@
 import 'mt5_bridge_client.dart';
+import 'mt5_metaapi_client.dart';
 
 /// OHLC bar from an external analysis source.
 class AnalysisBar {
@@ -30,28 +31,58 @@ abstract class MarketAnalysisProvider {
   });
 }
 
-/// Real read-only MT5 bridge provider. It has no order API by design.
+/// Unified read-only MT5 provider. Supports MetaAPI cloud or custom bridge.
+/// Intentionally exposes no order / modify / close API.
 class Mt5AnalysisProvider implements MarketAnalysisProvider {
-  Mt5AnalysisProvider({required this.client});
+  Mt5AnalysisProvider.bridge({required Mt5BridgeClient client})
+      : _bridge = client,
+        _meta = null,
+        sourceLabel = 'Bridge';
 
-  final Mt5BridgeClient client;
+  Mt5AnalysisProvider.metaApi({required Mt5MetaApiClient client})
+      : _meta = client,
+        _bridge = null,
+        sourceLabel = 'MetaAPI';
+
+  /// Backward-compatible constructor (custom bridge).
+  factory Mt5AnalysisProvider({required Mt5BridgeClient client}) =>
+      Mt5AnalysisProvider.bridge(client: client);
+
+  final Mt5BridgeClient? _bridge;
+  final Mt5MetaApiClient? _meta;
+  final String sourceLabel;
 
   @override
-  String get name => 'MT5';
+  String get name => 'MT5 ($sourceLabel)';
 
   @override
   bool get isAvailable => true;
 
-  Future<bool> checkConnection() => client.health();
+  Future<bool> checkConnection() async {
+    if (_meta != null) return _meta!.health();
+    return _bridge!.health();
+  }
 
-  Future<void> login({required String login, required String password}) =>
-      client.authenticate(login: login, password: password);
+  /// Bridge-only session login. MetaAPI uses token + accountId instead.
+  Future<void> login({required String login, required String password}) async {
+    if (_meta != null) return;
+    await _bridge!.authenticate(login: login, password: password);
+  }
 
-  Future<Mt5AccountSnapshot> account() => client.account();
+  Future<Mt5AccountSnapshot> account() async {
+    if (_meta != null) return _meta!.account();
+    return _bridge!.account();
+  }
 
-  Future<List<Mt5PositionSnapshot>> positions() => client.positions();
+  Future<List<Mt5PositionSnapshot>> positions() async {
+    if (_meta != null) return _meta!.positions();
+    return _bridge!.positions();
+  }
 
-  Future<List<String>> symbols() => client.symbols();
+  Future<List<String>> symbols() async {
+    if (_meta != null) return _meta!.symbols();
+    return _bridge!.symbols();
+  }
 
   @override
   Future<List<AnalysisBar>> fetchBars({
@@ -59,7 +90,11 @@ class Mt5AnalysisProvider implements MarketAnalysisProvider {
     required String timeframe,
     int limit = 100,
   }) async {
-    final bars = await client.bars(symbol: symbol, timeframe: timeframe, limit: limit);
+    if (_meta != null) {
+      return const [];
+    }
+    final bars =
+        await _bridge!.bars(symbol: symbol, timeframe: timeframe, limit: limit);
     return bars
         .map((bar) => AnalysisBar(
               time: bar.time,
@@ -72,5 +107,8 @@ class Mt5AnalysisProvider implements MarketAnalysisProvider {
         .toList(growable: false);
   }
 
-  void dispose() => client.dispose();
+  void dispose() {
+    _meta?.dispose();
+    _bridge?.dispose();
+  }
 }
