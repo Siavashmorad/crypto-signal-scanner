@@ -32,6 +32,7 @@ import 'connection_diagnose_page.dart';
 import 'market_chart_page.dart';
 import 'trade_settings_page.dart';
 import 'wallet_page.dart';
+import 'home_nav_section.dart';
 
 const ownerUsername = 'Siavashmorad';
 
@@ -921,6 +922,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              HomeNavSection(english: en),
               Card(
                 color: tabdealLinked
                     ? Colors.green.withOpacity(0.08)
