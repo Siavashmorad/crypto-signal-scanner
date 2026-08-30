@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'services/background_monitor_service.dart';
 import 'services/fcm_opportunity_payload.dart';
 import 'services/firebase_push_service.dart';
 import 'widgets/home_page.dart';
@@ -15,6 +18,13 @@ void main() async {
   try {
     await appPush.init();
   } catch (_) {}
+  // Android background monitor: public market reads + local alerts only.
+  if (Platform.isAndroid) {
+    try {
+      await BackgroundMonitorService.initialize();
+      await BackgroundMonitorService.syncFromSettings();
+    } catch (_) {}
+  }
   runApp(const SignalApp());
 }
 
