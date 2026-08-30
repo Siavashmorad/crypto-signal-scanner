@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/background_monitor_service.dart';
 import '../services/local_trade_store.dart';
 import '../services/tabdeal_trade.dart';
 
@@ -16,6 +17,7 @@ class _TradeSettingsPageState extends State<TradeSettingsPage> {
   final secretCtrl = TextEditingController();
   final qtyCtrl = TextEditingController(text: '0.001');
   bool live = false;
+  bool backgroundMonitor = true;
   bool loading = true;
   bool testing = false;
   String? message;
@@ -31,6 +33,8 @@ class _TradeSettingsPageState extends State<TradeSettingsPage> {
     secretCtrl.text = await store.apiSecret();
     qtyCtrl.text = (await store.defaultQty()).toString();
     live = await store.liveEnabled();
+    final prefs = await SharedPreferences.getInstance();
+    backgroundMonitor = prefs.getBool(kBackgroundMonitorEnabled) ?? true;
     if (mounted) setState(() => loading = false);
   }
 
@@ -42,8 +46,13 @@ class _TradeSettingsPageState extends State<TradeSettingsPage> {
       defaultQty: qty > 0 ? qty : 0.001,
       liveEnabled: live,
     );
+    try {
+      await BackgroundMonitorService.setEnabled(backgroundMonitor);
+    } catch (_) {}
     if (!mounted) return;
-    setState(() => message = widget.english ? 'Saved on this phone' : 'روی این گوشی ذخیره شد');
+    setState(() => message = widget.english
+        ? 'Saved on this phone'
+        : 'تنظیمات روی این گوشی ذخیره شد');
   }
 
   Future<void> _test() async {
@@ -65,7 +74,6 @@ class _TradeSettingsPageState extends State<TradeSettingsPage> {
             ? 'Keys OK — account reachable'
             : 'کلیدها درست است — حساب در دسترس';
       });
-      // ignore unused detail
       acc;
     } catch (e) {
       if (!mounted) return;
@@ -90,7 +98,7 @@ class _TradeSettingsPageState extends State<TradeSettingsPage> {
     return Directionality(
       textDirection: en ? TextDirection.ltr : TextDirection.rtl,
       child: Scaffold(
-        appBar: AppBar(title: Text(en ? 'Trading on phone' : 'معامله از گوشی')),
+        appBar: AppBar(title: Text(en ? 'Trading on phone' : 'تنظیمات معامله')),
         body: loading
             ? const Center(child: CircularProgressIndicator())
             : ListView(
@@ -145,6 +153,16 @@ class _TradeSettingsPageState extends State<TradeSettingsPage> {
                         : 'خاموش = فقط سیگنال. روشن = پول واقعی بعد از تأیید.'),
                     value: live,
                     onChanged: (v) => setState(() => live = v),
+                  ),
+                  SwitchListTile(
+                    title: Text(en
+                        ? 'Background opportunity monitoring'
+                        : 'پایش فرصت‌ها در پس‌زمینه'),
+                    subtitle: Text(en
+                        ? 'Checks market periodically while the app is closed. Notifications only; never places orders.'
+                        : 'در حالت بسته بودن برنامه به‌صورت دوره‌ای بازار را بررسی می‌کند. فقط اعلان؛ هیچ سفارشی ثبت نمی‌کند.'),
+                    value: backgroundMonitor,
+                    onChanged: (v) => setState(() => backgroundMonitor = v),
                   ),
                   if (message != null)
                     Padding(
