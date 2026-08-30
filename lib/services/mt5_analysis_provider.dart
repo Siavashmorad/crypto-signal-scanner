@@ -59,28 +59,33 @@ class Mt5AnalysisProvider implements MarketAnalysisProvider {
   bool get isAvailable => true;
 
   Future<bool> checkConnection() async {
-    if (_meta != null) return _meta!.health();
+    final meta = _meta;
+    if (meta != null) return meta.health();
     return _bridge!.health();
   }
 
   /// Bridge-only session login. MetaAPI uses token + accountId instead.
   Future<void> login({required String login, required String password}) async {
-    if (_meta != null) return;
+    final meta = _meta;
+    if (meta != null) return;
     await _bridge!.authenticate(login: login, password: password);
   }
 
   Future<Mt5AccountSnapshot> account() async {
-    if (_meta != null) return _meta!.account();
+    final meta = _meta;
+    if (meta != null) return meta.account();
     return _bridge!.account();
   }
 
   Future<List<Mt5PositionSnapshot>> positions() async {
-    if (_meta != null) return _meta!.positions();
+    final meta = _meta;
+    if (meta != null) return meta.positions();
     return _bridge!.positions();
   }
 
   Future<List<String>> symbols() async {
-    if (_meta != null) return _meta!.symbols();
+    final meta = _meta;
+    if (meta != null) return meta.symbols();
     return _bridge!.symbols();
   }
 
