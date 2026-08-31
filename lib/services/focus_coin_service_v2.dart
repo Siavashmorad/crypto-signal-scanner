@@ -122,7 +122,7 @@ class FocusCoinServiceV2 {
         current.result.score >= keepScore &&
         current.result.confidence >= startConfidence &&
         current.composite >= best.composite - switchAdvantage;
-    final chosen = keepCurrent ? current! : best;
+    final chosen = keepCurrent ? current : best;
     final switched = previousFocus != null &&
         chosen.signal.symbol != previousFocus;
     await _saveFocus(chosen.signal.symbol);
@@ -143,8 +143,7 @@ class FocusCoinServiceV2 {
       'روند اصلی: ${chosen.result.trendMainFa}',
       ...chosen.result.reasonsFa.take(5),
       'کندل و چندتایم‌فریم بررسی شد؛ بدون افزایش مصنوعی امتیاز',
-      if (!start)
-        'آستانه محافظه‌کارانه شروع کامل نشده؛ فعلاً تحت نظر',
+      if (!start) 'آستانه محافظه‌کارانه شروع کامل نشده؛ فعلاً تحت نظر',
     ];
 
     return FocusSnapshotV2(
