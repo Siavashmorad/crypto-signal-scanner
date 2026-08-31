@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
 import 'coin_analysis_page.dart';
+import 'focus_coin_page.dart';
 import 'smart_market_radar_page.dart';
 
 /// Compact navigation cards for Home — does not rewrite HomePage body.
+/// MT5 / MetaAPI intentionally omitted (user cannot access MetaAPI login).
 class HomeNavSection extends StatelessWidget {
   final bool english;
   const HomeNavSection({super.key, required this.english});
@@ -13,6 +15,21 @@ class HomeNavSection extends StatelessWidget {
     final en = english;
     return Column(
       children: [
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.center_focus_strong),
+            title: Text(en ? 'Focus Mode' : 'حالت فوکوس'),
+            subtitle: Text(en
+                ? 'One strong coin · candles · start now or switch'
+                : 'یک ارز قوی · کندل‌ها · الان شروع کن یا تعویض'),
+            trailing: Icon(en ? Icons.chevron_right : Icons.chevron_left),
+            onTap: () {
+              Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => FocusCoinPage(english: en),
+              ));
+            },
+          ),
+        ),
         Card(
           child: ListTile(
             leading: const Icon(Icons.analytics_outlined),
