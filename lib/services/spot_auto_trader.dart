@@ -7,7 +7,9 @@ import 'fa_labels.dart';
 import 'live_trading_gate.dart';
 import 'local_trade_store.dart';
 import 'order_sizing.dart';
+import 'paper_forward.dart';
 import 'position_tracker.dart';
+import 'scanner_service.dart';
 import 'signal_journal.dart';
 import 'symbol_rules_service.dart';
 import 'tabdeal_api.dart';
@@ -49,7 +51,6 @@ class SpotAutoTrader {
   final AutoTradeHistory history;
   final AndroidNotificationService androidNotify;
 
-  /// Returns true if user enabled auto strong SPOT trades.
   static Future<bool> isEnabled() async {
     final p = await SharedPreferences.getInstance();
     return p.getBool('auto_strong_spot_trade') ?? false;
@@ -63,6 +64,57 @@ class SpotAutoTrader {
             : (s.entry * 1e6).round();
     final scoreBand = (s.confidence / 5).floor() * 5;
     return '${s.symbol.toUpperCase()}:${s.side.toUpperCase()}:$scoreBand:$entryBand';
+  }
+
+  Duration _timeframeDuration(String timeframe) {
+    final normalized = timeframe.trim().toLowerCase();
+    if (normalized == '1h' || normalized == '60m') {
+      return const Duration(hours: 1);
+    }
+    if (normalized == '5m') return const Duration(minutes: 5);
+    if (normalized == '1m') return const Duration(minutes: 1);
+    return const Duration(minutes: 15);
+  }
+
+  /// Resolve old paper entries before evaluating the live gate.
+  ///
+  /// This is the missing link that can otherwise leave the gate stuck at
+  /// "pending" forever. Only real subsequent public candles are used; no
+  /// outcome is fabricated and live entries are never resolved here.
+  Future<List<JournalEntry>> _resolvePendingPaper(List<JournalEntry> input) async {
+    final pending = input
+        .where((e) => !e.isLive && e.outcome == JournalOutcome.pending)
+        .take(40)
+        .toList();
+    if (pending.isEmpty) return input;
+
+    final resolver = PaperForwardResolver();
+    final scanner = ScannerService(api);
+    final updated = [...input];
+    for (final entry in pending) {
+      try {
+        final trades = await api.trades(entry.symbol, limit: 500);
+        if (trades.length < 20) continue;
+        final candles = scanner.buildCandles(
+          trades,
+          _timeframeDuration(entry.timeframe),
+        );
+        final resolved = resolver.resolve(entry, candles, maxBars: 48);
+        if (resolved.outcome != JournalOutcome.pending) {
+          await journal.updateOutcome(
+            entry.id,
+            outcome: resolved.outcome,
+            rMultiple: resolved.rMultiple,
+            durationBars: resolved.durationBars,
+          );
+          final index = updated.indexWhere((e) => e.id == entry.id);
+          if (index >= 0) updated[index] = resolved;
+        }
+      } catch (_) {
+        // A single symbol must never block the whole gate evaluation.
+      }
+    }
+    return updated;
   }
 
   /// Evaluate and optionally open at most one SPOT trade from ranked signals.
@@ -83,10 +135,8 @@ class SpotAutoTrader {
     MarketSignal? best;
     for (final s in ranked) {
       if (s.confidence < kAutoTradeMinScore) continue;
-      // SPOT auto path: only LONG / buy. Bearish never becomes a short order.
       if (s.side.toUpperCase() != 'LONG') continue;
       if (s.entry <= 0 || s.stopLoss <= 0 || s.tp1 <= 0) continue;
-      // LONG-only: stop must be below entry.
       if (s.stopLoss >= s.entry) continue;
       final risk = (s.entry - s.stopLoss).abs();
       final reward = (s.tp1 - s.entry).abs();
@@ -99,7 +149,9 @@ class SpotAutoTrader {
     }
     if (best == null) return null;
 
-    final journalEntries = await journal.load();
+    var journalEntries = await journal.load();
+    journalEntries = await _resolvePendingPaper(journalEntries);
+
     final q = best.confidence >= 85
         ? 'A+'
         : best.confidence >= 72
@@ -116,7 +168,6 @@ class SpotAutoTrader {
     );
     if (!gateResult.allowLive) return null;
 
-    // Already filtered to LONG above.
     const side = 'BUY';
     const isBuy = true;
 
@@ -209,7 +260,6 @@ class SpotAutoTrader {
     }
   }
 
-  /// Monitor open auto trades; close on TP/SL using current market trades.
   Future<List<AutoTradeRecord>> monitorAndClose() async {
     final open = await history.openTrades();
     if (open.isEmpty) return const [];
