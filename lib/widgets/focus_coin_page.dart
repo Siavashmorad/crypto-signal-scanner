@@ -146,7 +146,7 @@ class _FocusCoinPageState extends State<FocusCoinPage> {
                 )
               else if (snap != null) ...[
                 Card(
-                  color: _actionColor(snap.action).withValues(alpha: 0.12),
+                  color: _actionColor(snap.action).withOpacity(0.12),
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
@@ -170,8 +170,8 @@ class _FocusCoinPageState extends State<FocusCoinPage> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          '${en ? 'Score' : 'امتیاز'}: ${snap.score.toStringAsFixed(0)} / 100'\
-                          ' · ${snap.timeframe}'\
+                          '${en ? 'Score' : 'امتیاز'}: ${snap.score.toStringAsFixed(0)} / 100'
+                          ' · ${snap.timeframe}'
                           ' · ${snap.dataSource}',
                         ),
                       ],
