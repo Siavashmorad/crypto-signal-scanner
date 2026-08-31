@@ -15,15 +15,13 @@ import 'symbol_rules_service.dart';
 import 'tabdeal_api.dart';
 import 'tabdeal_trade.dart';
 
-/// Hard safety cap — must not increase (matches backend MAX_POSITION_NOTIONAL_USDT).
 const double kMaxPositionNotionalUsdt = 50.0;
-
-/// Minimum score for unattended SPOT auto entry (user must enable setting).
 const double kAutoTradeMinScore = 90.0;
+/// Second, stricter AI-quality gate for unattended SPOT entries.
+/// The existing 90-point safety gate remains active; auto entry additionally
+/// requires a 95-point AI signal.
+const double kAiAutoTradeMinScore = 95.0;
 
-/// Automatic SPOT entries for very-strong opportunities only.
-/// Does NOT bypass Live Gate, emergency stop, risk, or notional cap.
-/// Does NOT place cloud/FCM/TV orders.
 class SpotAutoTrader {
   SpotAutoTrader({
     required this.api,
@@ -57,37 +55,22 @@ class SpotAutoTrader {
   }
 
   static String fingerprintOf(MarketSignal s) {
-    final entryBand = s.entry <= 0
-        ? 0
-        : s.entry >= 1
-            ? (s.entry * 100).round()
-            : (s.entry * 1e6).round();
+    final entryBand = s.entry <= 0 ? 0 : s.entry >= 1 ? (s.entry * 100).round() : (s.entry * 1e6).round();
     final scoreBand = (s.confidence / 5).floor() * 5;
     return '${s.symbol.toUpperCase()}:${s.side.toUpperCase()}:$scoreBand:$entryBand';
   }
 
   Duration _timeframeDuration(String timeframe) {
     final normalized = timeframe.trim().toLowerCase();
-    if (normalized == '1h' || normalized == '60m') {
-      return const Duration(hours: 1);
-    }
+    if (normalized == '1h' || normalized == '60m') return const Duration(hours: 1);
     if (normalized == '5m') return const Duration(minutes: 5);
     if (normalized == '1m') return const Duration(minutes: 1);
     return const Duration(minutes: 15);
   }
 
-  /// Resolve old paper entries before evaluating the live gate.
-  ///
-  /// This is the missing link that can otherwise leave the gate stuck at
-  /// "pending" forever. Only real subsequent public candles are used; no
-  /// outcome is fabricated and live entries are never resolved here.
   Future<List<JournalEntry>> _resolvePendingPaper(List<JournalEntry> input) async {
-    final pending = input
-        .where((e) => !e.isLive && e.outcome == JournalOutcome.pending)
-        .take(40)
-        .toList();
+    final pending = input.where((e) => !e.isLive && e.outcome == JournalOutcome.pending).take(40).toList();
     if (pending.isEmpty) return input;
-
     final resolver = PaperForwardResolver();
     final scanner = ScannerService(api);
     final updated = [...input];
@@ -95,39 +78,26 @@ class SpotAutoTrader {
       try {
         final trades = await api.trades(entry.symbol, limit: 500);
         if (trades.length < 20) continue;
-        final candles = scanner.buildCandles(
-          trades,
-          _timeframeDuration(entry.timeframe),
-        );
+        final candles = scanner.buildCandles(trades, _timeframeDuration(entry.timeframe));
         final resolved = resolver.resolve(entry, candles, maxBars: 48);
         if (resolved.outcome != JournalOutcome.pending) {
-          await journal.updateOutcome(
-            entry.id,
-            outcome: resolved.outcome,
-            rMultiple: resolved.rMultiple,
-            durationBars: resolved.durationBars,
-          );
+          await journal.updateOutcome(entry.id, outcome: resolved.outcome, rMultiple: resolved.rMultiple, durationBars: resolved.durationBars);
           final index = updated.indexWhere((e) => e.id == entry.id);
           if (index >= 0) updated[index] = resolved;
         }
-      } catch (_) {
-        // A single symbol must never block the whole gate evaluation.
-      }
+      } catch (_) {}
     }
     return updated;
   }
 
-  /// Evaluate and optionally open at most one SPOT trade from ranked signals.
   Future<AutoTradeRecord?> tryAutoOpen({
     required List<MarketSignal> ranked,
     required bool tabdealLinked,
   }) async {
     if (!await isEnabled()) return null;
-
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getBool('emergency_stop') ?? false) return null;
     if (prefs.getBool('prefer_futures_execution') ?? false) return null;
-
     final has = await tradeStore.hasKeys();
     final live = await tradeStore.liveEnabled();
     if (!has || !live) return null;
@@ -135,6 +105,7 @@ class SpotAutoTrader {
     MarketSignal? best;
     for (final s in ranked) {
       if (s.confidence < kAutoTradeMinScore) continue;
+      if (s.confidence < kAiAutoTradeMinScore) continue;
       if (s.side.toUpperCase() != 'LONG') continue;
       if (s.entry <= 0 || s.stopLoss <= 0 || s.tp1 <= 0) continue;
       if (s.stopLoss >= s.entry) continue;
@@ -151,14 +122,7 @@ class SpotAutoTrader {
 
     var journalEntries = await journal.load();
     journalEntries = await _resolvePendingPaper(journalEntries);
-
-    final q = best.confidence >= 85
-        ? 'A+'
-        : best.confidence >= 72
-            ? 'A'
-            : best.confidence >= 58
-                ? 'B'
-                : 'C';
+    final q = best.confidence >= 85 ? 'A+' : best.confidence >= 72 ? 'A' : best.confidence >= 58 ? 'B' : 'C';
     final gateResult = gate.evaluate(
       journal: journalEntries,
       quality: q,
@@ -170,17 +134,12 @@ class SpotAutoTrader {
 
     const side = 'BUY';
     const isBuy = true;
-
-    final client = TabdealTradeClient(
-      apiKey: await tradeStore.apiKey(),
-      apiSecret: await tradeStore.apiSecret(),
-    );
+    final client = TabdealTradeClient(apiKey: await tradeStore.apiKey(), apiSecret: await tradeStore.apiSecret());
     try {
       final filters = await rules.filtersFor(best.symbol);
       final snap = await client.accountSnapshot();
       final available = snap.available ? snap.freeQuote(best.symbol) : 0.0;
       final configured = await tradeStore.defaultQty();
-
       final size = sizing.compute(
         filters: filters,
         configuredQty: configured,
@@ -196,16 +155,10 @@ class SpotAutoTrader {
       final notional = size.finalQty * best.entry;
       if (notional > kMaxPositionNotionalUsdt + 0.01) return null;
 
-      final res = await client.marketOrder(
-        symbol: best.symbol,
-        side: side,
-        quantity: size.finalQty,
-      );
+      final res = await client.marketOrder(symbol: best.symbol, side: side, quantity: size.finalQty);
       final tracked = TrackedOrder.fromApi(res, fallbackSymbol: best.symbol);
       final fillPx = tracked.avgPrice > 0 ? tracked.avgPrice : best.entry;
-
-      final id =
-          'auto_${best.symbol}_${DateTime.now().millisecondsSinceEpoch}';
+      final id = 'auto_${best.symbol}_${DateTime.now().millisecondsSinceEpoch}';
       final record = AutoTradeRecord(
         id: id,
         symbol: best.symbol.toUpperCase().replaceAll('_', ''),
@@ -221,37 +174,11 @@ class SpotAutoTrader {
       );
       await history.add(record);
       await history.rememberFingerprint(fingerprintOf(best));
-
-      await journal.record(JournalEntry.fromSignal(
-        best,
-        quality: q,
-        score: best.confidence,
-        confidence: best.confidence,
-        reasons: 'auto_spot fill ${tracked.orderId ?? ''}',
-        mode: JournalMode.live,
-        isLive: true,
-      ));
-
-      final body = '🔔 معامله خودکار باز شد\n\n'
-          'نماد: ${record.symbol}\n'
-          'نوع: ${FaLabels.side(record.side)}\n'
-          'امتیاز تحلیل: ${record.score.toStringAsFixed(0)} از ۱۰۰\n'
-          'قیمت ورود: ${record.entry}\n'
-          'حد ضرر: ${record.stopLoss}\n'
-          'حد سود: ${record.takeProfit}\n'
-          'مقدار: ${record.qty}';
+      await journal.record(JournalEntry.fromSignal(best, quality: q, score: best.confidence, confidence: best.confidence, reasons: 'auto_spot fill ${tracked.orderId ?? ''}', mode: JournalMode.live, isLive: true));
+      final body = '🔔 معامله خودکار باز شد\n\nنماد: ${record.symbol}\nنوع: ${FaLabels.side(record.side)}\nامتیاز تحلیل: ${record.score.toStringAsFixed(0)} از ۱۰۰\nقیمت ورود: ${record.entry}\nحد ضرر: ${record.stopLoss}\nحد سود: ${record.takeProfit}\nمقدار: ${record.qty}';
       try {
-        await androidNotify.showOpportunity(
-          id: record.id.hashCode & 0x7fffffff,
-          title: 'معامله خودکار باز شد',
-          body: body,
-          payload: AndroidNotificationService.payloadFor(
-            symbol: record.symbol,
-            side: record.side,
-          ),
-        );
+        await androidNotify.showOpportunity(id: record.id.hashCode & 0x7fffffff, title: 'معامله خودکار باز شد', body: body, payload: AndroidNotificationService.payloadFor(symbol: record.symbol, side: record.side));
       } catch (_) {}
-
       return record;
     } catch (_) {
       return null;
@@ -263,28 +190,19 @@ class SpotAutoTrader {
   Future<List<AutoTradeRecord>> monitorAndClose() async {
     final open = await history.openTrades();
     if (open.isEmpty) return const [];
-
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getBool('emergency_stop') ?? false) return const [];
-
     final closed = <AutoTradeRecord>[];
     final has = await tradeStore.hasKeys();
     if (!has) return const [];
-
-    final client = TabdealTradeClient(
-      apiKey: await tradeStore.apiKey(),
-      apiSecret: await tradeStore.apiSecret(),
-    );
+    final client = TabdealTradeClient(apiKey: await tradeStore.apiKey(), apiSecret: await tradeStore.apiSecret());
     try {
       for (final t in open) {
         List<TradePoint> trades = const [];
-        try {
-          trades = await api.trades(t.symbol, limit: 50);
-        } catch (_) {}
+        try { trades = await api.trades(t.symbol, limit: 50); } catch (_) {}
         if (trades.isEmpty) continue;
         final last = trades.last.price;
         if (last <= 0) continue;
-
         final isLong = t.side.toUpperCase() == 'LONG';
         String? reason;
         if (isLong) {
@@ -295,61 +213,17 @@ class SpotAutoTrader {
           if (last <= t.takeProfit) reason = 'TP';
         }
         if (reason == null) continue;
-
         final closeSide = isLong ? 'SELL' : 'BUY';
-        try {
-          await client.marketOrder(
-            symbol: t.symbol,
-            side: closeSide,
-            quantity: t.qty,
-          );
-        } catch (_) {
-          continue;
-        }
-
-        final pnl = isLong
-            ? (last - t.entry) * t.qty
-            : (t.entry - last) * t.qty;
-        await history.close(
-          t.id,
-          exitPrice: last,
-          pnlQuote: pnl,
-          exitReason: reason,
-        );
-        final updated = t.copyWith(
-          closedAt: DateTime.now(),
-          exitPrice: last,
-          pnlQuote: pnl,
-          exitReason: reason,
-          status: 'closed',
-        );
+        try { await client.marketOrder(symbol: t.symbol, side: closeSide, quantity: t.qty); } catch (_) { continue; }
+        final pnl = isLong ? (last - t.entry) * t.qty : (t.entry - last) * t.qty;
+        await history.close(t.id, exitPrice: last, pnlQuote: pnl, exitReason: reason);
+        final updated = t.copyWith(closedAt: DateTime.now(), exitPrice: last, pnlQuote: pnl, exitReason: reason, status: 'closed');
         closed.add(updated);
-
         final dur = updated.closedAt!.difference(t.openedAt);
-        final mins = dur.inMinutes;
-        final body = '🔔 معامله خودکار بسته شد\n\n'
-            'نماد: ${t.symbol}\n'
-            'نتیجه: ${FaLabels.pnlLabel(pnl)}\n'
-            'قیمت ورود: ${t.entry}\n'
-            'قیمت خروج: $last\n'
-            'سود/زیان: ${pnl.toStringAsFixed(4)}\n'
-            'مدت معامله: $mins دقیقه\n'
-            'دلیل خروج: ${FaLabels.exitReason(reason)}';
-        try {
-          await androidNotify.showOpportunity(
-            id: (t.id.hashCode ^ 0x55) & 0x7fffffff,
-            title: 'معامله خودکار بسته شد',
-            body: body,
-            payload: AndroidNotificationService.payloadFor(
-              symbol: t.symbol,
-              side: t.side,
-            ),
-          );
-        } catch (_) {}
+        final body = '🔔 معامله خودکار بسته شد\n\nنماد: ${t.symbol}\nنتیجه: ${FaLabels.pnlLabel(pnl)}\nقیمت ورود: ${t.entry}\nقیمت خروج: $last\nسود/زیان: ${pnl.toStringAsFixed(4)}\nمدت معامله: ${dur.inMinutes} دقیقه\nدلیل خروج: ${FaLabels.exitReason(reason)}';
+        try { await androidNotify.showOpportunity(id: (t.id.hashCode ^ 0x55) & 0x7fffffff, title: 'معامله خودکار بسته شد', body: body, payload: AndroidNotificationService.payloadFor(symbol: t.symbol, side: t.side)); } catch (_) {}
       }
-    } finally {
-      client.dispose();
-    }
+    } finally { client.dispose(); }
     return closed;
   }
 }
