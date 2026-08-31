@@ -12,7 +12,7 @@ const String kBackgroundLastResult = 'background_monitor_last_result';
 
 /// Android background market monitor.
 ///
-/// This worker is intentionally read-only: it scans public market data and may
+/// The worker is deliberately read-only: it scans public market data and may
 /// emit a local notification. It never calls SpotAutoTrader, Futures execution,
 /// or any cloud/FCM order path.
 @pragma('vm:entry-point')
@@ -21,7 +21,7 @@ void signalyabBackgroundCallback() {
     if (task != kBackgroundMonitorTask) return true;
     try {
       final prefs = await SharedPreferences.getInstance();
-      if (!(prefs.getBool(kBackgroundMonitorEnabled) ?? false)) return true;
+      if (!(prefs.getBool(kBackgroundMonitorEnabled) ?? true)) return true;
 
       final api = TabdealApi();
       final scanner = ScannerService(api);
@@ -42,7 +42,6 @@ void signalyabBackgroundCallback() {
 
       if (signals.isNotEmpty) {
         final best = signals.first;
-        // Notification is informational only. No execution is possible here.
         final notifications = AndroidNotificationService();
         await notifications.init();
         await notifications.showOpportunity(
@@ -71,28 +70,23 @@ class BackgroundMonitorService {
   const BackgroundMonitorService._();
 
   static Future<void> initialize() async {
-    Workmanager().initialize(signalyabBackgroundCallback);
-    final prefs = await SharedPreferences.getInstance();
-    final enabled = prefs.getBool(kBackgroundMonitorEnabled) ?? false;
-    if (enabled) {
-      await _register();
-    }
+    await Workmanager().initialize(signalyabBackgroundCallback);
+    // Keep the periodic worker registered even when disabled. The worker
+    // checks the preference and exits immediately when the user turns it off.
+    await _register();
   }
 
   static Future<void> setEnabled(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(kBackgroundMonitorEnabled, enabled);
     await prefs.setBool('realtime_background_polling', enabled);
-    if (enabled) {
-      await _register();
-    } else {
-      await Workmanager().cancelByUniqueName(kBackgroundMonitorTask);
-    }
+    // Register immediately so a setting change takes effect without an app restart.
+    await _register();
   }
 
   static Future<bool> isEnabled() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(kBackgroundMonitorEnabled) ?? false;
+    return prefs.getBool(kBackgroundMonitorEnabled) ?? true;
   }
 
   static Future<DateTime?> lastRun() async {
@@ -107,12 +101,9 @@ class BackgroundMonitorService {
   }
 
   static Future<void> syncFromSettings() async {
-    final enabled = await isEnabled();
-    if (enabled) {
-      await _register();
-    } else {
-      await Workmanager().cancelByUniqueName(kBackgroundMonitorTask);
-    }
+    // Do not cancel the scheduler when disabled: the worker itself observes
+    // the preference, so re-enabling works immediately from the settings page.
+    await _register();
   }
 
   static Future<void> _register() async {
@@ -121,9 +112,7 @@ class BackgroundMonitorService {
       kBackgroundMonitorTask,
       frequency: const Duration(minutes: 15),
       existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
-      constraints: Constraints(
-        networkType: NetworkType.connected,
-      ),
+      constraints: Constraints(networkType: NetworkType.connected),
       backoffPolicy: BackoffPolicy.exponential,
       backoffPolicyDelay: const Duration(minutes: 10),
     );
