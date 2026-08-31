@@ -1,4 +1,5 @@
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 import '../models/market_data.dart';
 
@@ -64,7 +65,6 @@ class AiAnalystService {
 
   AiAnalystService({http.Client? client}) : client = client ?? http.Client();
 
-  /// Always true: local engine works offline; remote used when URL is set.
   bool get configured => true;
   bool get remoteConfigured => backendUrl.trim().isNotEmpty;
 
@@ -81,7 +81,7 @@ class AiAnalystService {
           password: password,
         );
       } catch (_) {
-        // Fall through to local engine so the user always gets analysis.
+        // Offline/local fallback keeps analysis available without weakening gates.
       }
     }
     return _localAnalyze(signal);
@@ -102,7 +102,7 @@ class AiAnalystService {
             'Content-Type': 'application/json',
             'Authorization': 'Basic $basic',
           },
-          body: jsonEncode({'signal': _signalJson(signal)}),
+          body: jsonEncode({'signal': _enrichedSignalJson(signal)}),
         )
         .timeout(const Duration(seconds: 25));
 
@@ -112,6 +112,13 @@ class AiAnalystService {
 
     final parsed = AiAnalysis.fromJson(
       jsonDecode(response.body) as Map<String, dynamic>,
+    );
+
+    // The model may explain a setup, but it may not manufacture confidence
+    // above the measured scanner evidence supplied to it.
+    final cappedConfidence = parsed.confidence.clamp(
+      0,
+      signal.confidence.round().clamp(0, 100),
     );
     return AiAnalysis(
       symbol: parsed.symbol.isEmpty ? signal.symbol : parsed.symbol,
@@ -125,101 +132,122 @@ class AiAnalystService {
       bearCase: parsed.bearCase,
       invalidation: parsed.invalidation,
       recommendation: parsed.recommendation,
-      confidence: parsed.confidence,
+      confidence: cappedConfidence,
       reasons: parsed.reasons,
       source: 'remote',
     );
   }
 
-  /// On-device multi-factor analyst (works without backend).
+  /// Local multi-factor analyst. It deliberately uses only measured signal
+  /// fields and freshness/risk geometry; it does not invent market facts.
   AiAnalysis _localAnalyze(MarketSignal signal) {
-    final conf = signal.confidence;
+    final baseConfidence = signal.confidence.clamp(0, 100).toDouble();
     final rr = signal.riskReward;
     final atrPct = signal.entry > 0 ? (signal.atr / signal.entry) * 100 : 0;
     final isLong = signal.side.toUpperCase() == 'LONG';
+    final ageSeconds = DateTime.now().difference(signal.timestamp).inSeconds;
+    final freshnessPenalty = ageSeconds <= 60
+        ? 0
+        : ageSeconds <= 300
+            ? 3
+            : ageSeconds <= 900
+                ? 8
+                : 15;
+    final rrPenalty = rr < 1.2 ? 12 : rr < 1.5 ? 7 : rr < 1.8 ? 3 : 0;
+    final riskPenalty = atrPct >= 4 ? 12 : atrPct >= 2.5 ? 7 : atrPct >= 1.2 ? 2 : 0;
+    final evidenceConfidence =
+        (baseConfidence - freshnessPenalty - rrPenalty - riskPenalty)
+            .clamp(0, 100)
+            .round();
 
-    String trend;
-    if (conf >= 75) {
-      trend = isLong ? 'صعودی قوی' : 'نزولی قوی';
-    } else if (conf >= 65) {
-      trend = isLong ? 'صعودی' : 'نزولی';
-    } else {
-      trend = 'خنثی متمایل به ${isLong ? 'صعود' : 'نزول'}';
-    }
+    final trend = baseConfidence >= 75
+        ? (isLong ? 'صعودی قوی' : 'نزولی قوی')
+        : baseConfidence >= 65
+            ? (isLong ? 'صعودی' : 'نزولی')
+            : 'خنثی متمایل به ${isLong ? 'صعود' : 'نزول'}';
 
-    String momentum;
-    if (conf >= 70) {
-      momentum = 'هم‌راستا با سیگنال';
-    } else if (conf >= 60) {
-      momentum = 'متوسط';
-    } else {
-      momentum = 'ضعیف / نیازمند تأیید بیشتر';
-    }
+    final momentum = baseConfidence >= 70
+        ? 'هم‌راستا با سیگنال'
+        : baseConfidence >= 60
+            ? 'متوسط'
+            : 'ضعیف / نیازمند تأیید بیشتر';
 
-    String risk;
-    if (atrPct >= 2.5) {
-      risk = 'بالا (نوسان زیاد)';
-    } else if (atrPct >= 1.2) {
-      risk = 'متوسط';
-    } else {
-      risk = 'کنترل‌شده';
-    }
+    final risk = atrPct >= 2.5
+        ? 'بالا (نوسان زیاد)'
+        : atrPct >= 1.2
+            ? 'متوسط'
+            : 'کنترل‌شده';
 
-    String quality;
-    if (conf >= 75 && rr >= 1.8) {
-      quality = 'خوب';
-    } else if (conf >= 62) {
-      quality = 'قابل‌قبول';
-    } else {
-      quality = 'ضعیف';
-    }
+    final quality = evidenceConfidence >= 82 && rr >= 1.8
+        ? 'عالی'
+        : evidenceConfidence >= 72 && rr >= 1.5
+            ? 'خوب'
+            : evidenceConfidence >= 60
+                ? 'قابل‌قبول'
+                : 'ضعیف';
 
-    String recommendation;
-    if (conf >= 72 && atrPct < 3.5) {
-      recommendation = isLong ? 'LONG_BIAS' : 'SHORT_BIAS';
-    } else if (conf >= 60) {
-      recommendation = 'WATCH';
-    } else {
-      recommendation = 'AVOID';
-    }
+    final recommendation = evidenceConfidence >= 78 && rr >= 1.5 && freshnessPenalty < 15
+        ? (isLong ? 'LONG_BIAS' : 'SHORT_BIAS')
+        : evidenceConfidence >= 62
+            ? 'WATCH'
+            : 'AVOID';
 
     final reasons = <String>[
-      'اطمینان موتور سیگنال: ${conf.toStringAsFixed(0)}٪',
-      'نسبت ریسک به ریوارد حدود ۱:${rr.toStringAsFixed(1)}',
+      'امتیاز پایه موتور: ${baseConfidence.toStringAsFixed(0)} از ۱۰۰',
+      'اطمینان تعدیل‌شده با تازگی و ریسک: $evidenceConfidence از ۱۰۰',
+      'نسبت ریسک به بازده: ۱:${rr.toStringAsFixed(1)}',
       'نوسان ATR نسبت به قیمت: ${atrPct.toStringAsFixed(2)}٪',
-      isLong
-          ? 'ساختار قیمت از EMA کوتاه‌مدت حمایت می‌کند'
-          : 'ساختار قیمت زیر EMA کوتاه‌مدت فشار فروش نشان می‌دهد',
-      'ورود پیشنهادی ${signal.entry.toStringAsFixed(6)} با حد ضرر ${signal.stopLoss.toStringAsFixed(6)}',
+      ageSeconds < 0
+          ? 'زمان سیگنال غیرعادی است؛ با احتیاط بررسی شود'
+          : 'سن سیگنال: ${ageSeconds}s',
+      isLong ? 'جهت سیگنال: LONG' : 'جهت سیگنال: SHORT',
     ];
-
-    final summary = isLong
-        ? 'تحلیلگر داخلی: تمایل خرید روی ${signal.symbol}. کیفیت $quality، ریسک $risk. قبل از ورود حجم و اخبار را بررسی کنید.'
-        : 'تحلیلگر داخلی: تمایل فروش روی ${signal.symbol}. کیفیت $quality، ریسک $risk. قبل از ورود حجم و اخبار را بررسی کنید.';
 
     return AiAnalysis(
       symbol: signal.symbol,
       side: signal.side,
-      summary: summary,
+      summary: isLong
+          ? 'تحلیل ترکیبی: ساختار فعلی تمایل صعودی دارد؛ کیفیت $quality و ریسک $risk است. قبل از هر تصمیم، وضعیت داده و گیت زنده بررسی شود.'
+          : 'تحلیل ترکیبی: ساختار فعلی تمایل نزولی دارد؛ کیفیت $quality و ریسک $risk است. برای اسپات اقدام خرید انجام نشود.',
       trend: trend,
       momentum: momentum,
       riskLevel: risk,
       signalQuality: quality,
       bullCase: isLong
-          ? 'حفظ ساختار بالای ورود و رسیدن به TP1/TP2'
-          : 'اگر قیمت برگردد بالای ورود، سناریوی شورت تضعیف می‌شود',
+          ? 'حفظ ساختار بالای ورود و رسیدن مرحله‌ای به اهداف'
+          : 'ادامه فشار فروش تا اهداف در صورت حفظ ساختار نزولی',
       bearCase: isLong
-          ? 'شکست حد ضرر ${signal.stopLoss.toStringAsFixed(6)} سیگنال را باطل می‌کند'
-          : 'ادامه فشار فروش تا TP1/TP2'
-      ,
+          ? 'شکست حد ضرر ${signal.stopLoss.toStringAsFixed(6)} سناریوی صعودی را باطل می‌کند'
+          : 'بازگشت بالای حد ضرر ${signal.stopLoss.toStringAsFixed(6)} سناریوی نزولی را باطل می‌کند',
       invalidation: isLong
-          ? 'بستن زیر ${signal.stopLoss.toStringAsFixed(6)}'
-          : 'بستن بالای ${signal.stopLoss.toStringAsFixed(6)}',
+          ? 'بسته‌شدن زیر ${signal.stopLoss.toStringAsFixed(6)}'
+          : 'بسته‌شدن بالای ${signal.stopLoss.toStringAsFixed(6)}',
       recommendation: recommendation,
-      confidence: conf.round().clamp(0, 100),
+      confidence: evidenceConfidence,
       reasons: reasons,
       source: 'local',
     );
+  }
+
+  Map<String, dynamic> _enrichedSignalJson(MarketSignal signal) {
+    final age = DateTime.now().difference(signal.timestamp).inSeconds;
+    final stopDistancePct = signal.entry > 0
+        ? ((signal.entry - signal.stopLoss).abs() / signal.entry) * 100
+        : 0.0;
+    final targetDistancePct = signal.entry > 0
+        ? ((signal.tp1 - signal.entry).abs() / signal.entry) * 100
+        : 0.0;
+    return {
+      ..._signalJson(signal),
+      'data_age_seconds': age.clamp(0, 86400),
+      'stop_distance_pct': stopDistancePct,
+      'tp1_distance_pct': targetDistancePct,
+      'evidence': {
+        'fresh': age <= 300,
+        'risk_reward_ok': signal.riskReward >= 1.5,
+        'side': signal.side.toUpperCase(),
+      },
+    };
   }
 
   Map<String, dynamic> _signalJson(MarketSignal signal) => {
