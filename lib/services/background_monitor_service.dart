@@ -71,8 +71,6 @@ class BackgroundMonitorService {
 
   static Future<void> initialize() async {
     await Workmanager().initialize(signalyabBackgroundCallback);
-    // Keep the periodic worker registered even when disabled. The worker
-    // checks the preference and exits immediately when the user turns it off.
     await _register();
   }
 
@@ -80,7 +78,6 @@ class BackgroundMonitorService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(kBackgroundMonitorEnabled, enabled);
     await prefs.setBool('realtime_background_polling', enabled);
-    // Register immediately so a setting change takes effect without an app restart.
     await _register();
   }
 
@@ -101,8 +98,6 @@ class BackgroundMonitorService {
   }
 
   static Future<void> syncFromSettings() async {
-    // Do not cancel the scheduler when disabled: the worker itself observes
-    // the preference, so re-enabling works immediately from the settings page.
     await _register();
   }
 
@@ -111,7 +106,7 @@ class BackgroundMonitorService {
       kBackgroundMonitorTask,
       kBackgroundMonitorTask,
       frequency: const Duration(minutes: 15),
-      existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+      existingWorkPolicy: ExistingWorkPolicy.keep,
       constraints: Constraints(networkType: NetworkType.connected),
       backoffPolicy: BackoffPolicy.exponential,
       backoffPolicyDelay: const Duration(minutes: 10),
