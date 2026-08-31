@@ -1,12 +1,12 @@
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../models/market_data.dart';
 import 'coin_analysis_service.dart';
 import 'scanner_service.dart';
 import 'tabdeal_api.dart';
 
-/// Higher-quality single-symbol focus layer.
-/// It does not invent scores or prices: candidates are re-evaluated from real
-/// multi-timeframe candles through CoinAnalysisService/QuantSignalEngine.
-/// No order path exists here.
+/// Conservative single-symbol focus layer.
+/// Re-evaluates real market data and never creates orders.
 class FocusCoinServiceV2 {
   FocusCoinServiceV2({TabdealApi? api, ScannerService? scanner})
       : api = api ?? TabdealApi(),
@@ -18,16 +18,42 @@ class FocusCoinServiceV2 {
   final CoinAnalysisService analysis;
 
   static const int candidateCount = 6;
-  static const double keepScore = 60;
-  static const double startScore = 72;
+  static const double keepScore = 80;
+  static const double startScore = 93;
+  static const int startConfidence = 75;
+  static const double startRiskReward = 1.8;
+  static const double switchAdvantage = 4;
+  static const String _focusKey = 'signalyab_focus_symbol';
 
   String? _focusSymbol;
   String? get focusSymbol => _focusSymbol;
+
+  Future<void> _restoreFocus() async {
+    if (_focusSymbol != null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _focusSymbol = prefs.getString(_focusKey);
+    } catch (_) {}
+  }
+
+  Future<void> _saveFocus(String? symbol) async {
+    _focusSymbol = symbol;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (symbol == null) {
+        await prefs.remove(_focusKey);
+      } else {
+        await prefs.setString(_focusKey, symbol);
+      }
+    } catch (_) {}
+  }
 
   Future<FocusSnapshotV2> tick({
     Duration timeframe = const Duration(minutes: 15),
     int maxSymbols = 40,
   }) async {
+    await _restoreFocus();
+    final previousFocus = _focusSymbol;
     final now = DateTime.now();
     final scanned = await scanner.scanAll(
       timeframe: timeframe,
@@ -42,15 +68,13 @@ class FocusCoinServiceV2 {
       ..sort((a, b) => b.confidence.compareTo(a.confidence));
 
     if (longs.isEmpty) {
-      _focusSymbol = null;
+      await _saveFocus(null);
       return FocusSnapshotV2.empty(now, scanner.dataSource);
     }
 
-    // Deep-check only the strongest few instead of trusting the scanner score alone.
     final pool = <MarketSignal>[];
-    if (_focusSymbol != null) {
-      final current = longs.where((s) => s.symbol == _focusSymbol);
-      pool.addAll(current);
+    if (previousFocus != null) {
+      pool.addAll(longs.where((s) => s.symbol == previousFocus));
     }
     for (final s in longs) {
       if (pool.any((x) => x.symbol == s.symbol)) continue;
@@ -68,46 +92,59 @@ class FocusCoinServiceV2 {
             r.hasTradePlan &&
             (r.riskReward ?? 0) >= 1.4;
         if (usable) {
-          final composite = r.score * 0.65 + r.confidence * 0.35;
-          evaluated.add(_FocusCandidate(signal, r, composite));
+          evaluated.add(
+            _FocusCandidate(
+              signal,
+              r,
+              r.score * 0.65 + r.confidence * 0.35,
+            ),
+          );
         }
       } catch (_) {}
     }
 
     evaluated.sort((a, b) => b.composite.compareTo(a.composite));
-
-    _FocusCandidate? current;
-    if (_focusSymbol != null) {
-      for (final c in evaluated) {
-        if (c.signal.symbol == _focusSymbol) {
-          current = c;
-          break;
-        }
-      }
-    }
-
-    final chosen = current ?? (evaluated.isNotEmpty ? evaluated.first : null);
-    if (chosen == null) {
-      _focusSymbol = null;
+    if (evaluated.isEmpty) {
+      await _saveFocus(null);
       return FocusSnapshotV2.empty(now, scanner.dataSource);
     }
 
-    final switched = _focusSymbol != null && _focusSymbol != chosen.signal.symbol;
-    _focusSymbol = chosen.signal.symbol;
+    _FocusCandidate? current;
+    for (final c in evaluated) {
+      if (c.signal.symbol == previousFocus) {
+        current = c;
+        break;
+      }
+    }
+
+    final best = evaluated.first;
+    final keepCurrent = current != null &&
+        current.result.score >= keepScore &&
+        current.result.confidence >= startConfidence &&
+        current.composite >= best.composite - switchAdvantage;
+    final chosen = keepCurrent ? current! : best;
+    final switched = previousFocus != null &&
+        chosen.signal.symbol != previousFocus;
+    await _saveFocus(chosen.signal.symbol);
+
     final start = chosen.result.score >= startScore &&
-        chosen.result.confidence >= 65;
+        chosen.result.confidence >= startConfidence &&
+        (chosen.result.riskReward ?? 0) >= startRiskReward;
     final action = switched
         ? FocusActionV2.switchFocus
         : (start ? FocusActionV2.startNow : FocusActionV2.wait);
 
     final reasons = <String>[
-      if (switched) 'فوکوس قبلی ضعیف شد → تعویض به ${chosen.signal.symbol}',
+      if (switched)
+        'فوکوس قبلی ضعیف‌تر شد → تعویض به ${chosen.signal.symbol}',
       'امتیاز عمیق تحلیل: ${chosen.result.score.toStringAsFixed(0)} / ۱۰۰',
       'اطمینان: ${chosen.result.confidence}٪',
       'رژیم: ${chosen.result.regimeFa}',
       'روند اصلی: ${chosen.result.trendMainFa}',
       ...chosen.result.reasonsFa.take(5),
       'کندل و چندتایم‌فریم بررسی شد؛ بدون افزایش مصنوعی امتیاز',
+      if (!start)
+        'آستانه محافظه‌کارانه شروع کامل نشده؛ فعلاً تحت نظر',
     ];
 
     return FocusSnapshotV2(
@@ -173,7 +210,8 @@ class FocusSnapshotV2 {
   final String dataSource;
   final MarketSignal? signal;
 
-  factory FocusSnapshotV2.empty(DateTime now, String source) => FocusSnapshotV2(
+  factory FocusSnapshotV2.empty(DateTime now, String source) =>
+      FocusSnapshotV2(
         symbol: null,
         action: FocusActionV2.noSetup,
         score: 0,
