@@ -2,6 +2,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 
 import 'android_notification_service.dart';
+import 'focus_coin_service_v2.dart';
 import 'scanner_service.dart';
 import 'tabdeal_api.dart';
 
@@ -11,10 +12,7 @@ const String kBackgroundLastRun = 'background_monitor_last_run';
 const String kBackgroundLastResult = 'background_monitor_last_result';
 
 /// Android background market monitor.
-///
-/// The worker is deliberately read-only: it scans public market data and may
-/// emit a local notification. It never calls SpotAutoTrader, Futures execution,
-/// or any cloud/FCM order path.
+/// Read-only: no SpotAutoTrader/Futures/FCM/cloud order path is called here.
 @pragma('vm:entry-point')
 void signalyabBackgroundCallback() {
   Workmanager().executeTask((task, inputData) async {
@@ -25,33 +23,49 @@ void signalyabBackgroundCallback() {
 
       final api = TabdealApi();
       final scanner = ScannerService(api);
-      final signals = await scanner.scanAll(
+      final focus = FocusCoinServiceV2(api: api, scanner: scanner);
+      final snapshot = await focus.tick(
         timeframe: const Duration(minutes: 15),
-        maxConcurrency: 4,
-        maxSymbols: 12,
-        maxSignals: 6,
-        preferSpot: true,
+        maxSymbols: 40,
       );
 
       final now = DateTime.now();
       await prefs.setString(kBackgroundLastRun, now.toIso8601String());
       await prefs.setString(
         kBackgroundLastResult,
-        signals.isEmpty ? 'no_opportunity' : 'ok',
+        snapshot.symbol == null ? 'no_qualified_setup' : 'ok',
       );
 
-      if (signals.isNotEmpty) {
-        final best = signals.first;
+      if (snapshot.symbol != null && snapshot.score >= 80) {
         final notifications = AndroidNotificationService();
         await notifications.init();
+
+        final String title;
+        final String status;
+        if (snapshot.score >= 95) {
+          title = '🔥 سیگنال‌یاب · فرصت بسیار قوی';
+          status = 'شرایط بررسی خودکار را دارد';
+        } else if (snapshot.score >= 93) {
+          title = '🟢 سیگنال‌یاب · فرصت قوی';
+          status = 'هشدار فرصت قوی؛ بررسی ورود';
+        } else if (snapshot.score >= 90) {
+          title = '🟡 سیگنال‌یاب · فرصت قابل بررسی';
+          status = 'هنوز تأیید نهایی لازم است';
+        } else {
+          title = '🔵 سیگنال‌یاب · زیر آستانه ورود';
+          status = 'فعلاً فقط تحت نظر';
+        }
+
+        final body = '${snapshot.symbol} · LONG · امتیاز ${snapshot.score.toStringAsFixed(0)}/100\n'
+            '$status · اطمینان ${snapshot.confidence}%\n'
+            'R/R: 1:${snapshot.riskReward.toStringAsFixed(1)}';
         await notifications.showOpportunity(
-          id: best.symbol.hashCode & 0x7fffffff,
-          title: 'سیگنال‌یاب · فرصت بازار',
-          body:
-              '${best.symbol} · امتیاز ${best.confidence.toStringAsFixed(0)} · ${best.side == 'LONG' ? 'تمایل صعودی' : 'تمایل نزولی'}',
+          id: snapshot.symbol.hashCode & 0x7fffffff,
+          title: title,
+          body: body,
           payload: AndroidNotificationService.payloadFor(
-            symbol: best.symbol,
-            side: best.side,
+            symbol: snapshot.symbol!,
+            side: snapshot.side,
           ),
         );
       }
@@ -97,9 +111,7 @@ class BackgroundMonitorService {
     return prefs.getString(kBackgroundLastResult) ?? 'never';
   }
 
-  static Future<void> syncFromSettings() async {
-    await _register();
-  }
+  static Future<void> syncFromSettings() async => _register();
 
   static Future<void> _register() async {
     await Workmanager().registerPeriodicTask(
