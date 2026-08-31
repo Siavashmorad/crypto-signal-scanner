@@ -1,30 +1,21 @@
-# SignalYab Focus AI — next implementation phase
+# SignalYab Focus AI — implementation status
 
-## Objective
-Build a conservative market-focus/radar layer that continuously ranks supported spot markets, focuses analysis on the strongest setup, and switches focus when the setup deteriorates. It must not inflate scores or bypass existing execution gates.
+The Focus AI layer continuously ranks a bounded supported-market universe, deep-checks the strongest candidates using real market data, focuses on one candidate, and switches only when the replacement is materially better or the current setup becomes invalid/stale.
 
-## Requirements
-- Multi-timeframe analysis: 1D, 4H, 1H, 15m where data is available.
-- Evaluate trend/structure, momentum, volatility, volume, support/resistance, entry quality, stop-loss distance, take-profit quality and risk/reward.
-- Produce an auditable score with component breakdown; no artificial score inflation.
-- Focus on one best candidate while retaining a ranked shortlist for failover.
-- Re-evaluate on every market-data refresh; switch focus only when the replacement has materially better quality or the current setup becomes invalid/stale.
-- States: FOCUS, WATCH, WAIT, INVALID, STALE.
-- Generate Android notifications from background monitoring only. Background must remain read-only.
-- Notification thresholds must be configurable, with high-confidence alerting at 93/95, but thresholds do not bypass LiveTradingGate.
-- For SPOT, bearish signals are informational only: no short action.
-- Automatic Spot execution remains behind all existing safety gates and must not be called from background workers.
-- Preserve existing Tabdeal host `https://api1.tabdeal.org`, max notional 50 USDT, min sample 20, minimum expectancy R 0.05, and existing score/gate logic.
-- Keep MT5 read-only/analysis-only unless separately enabled later.
-- Add tests for ranking, focus switching, stale invalidation, score breakdown, no inflation, notification threshold, and background no-order behavior.
+Safety contract:
+- No artificial score inflation.
+- SPOT bearish signals remain informational; no spot short.
+- Background monitoring is read-only and never calls an order path.
+- Unknown/stale/failed market state => NO TRADE.
+- Preserve `https://api1.tabdeal.org`, max notional 50 USDT, min sample 20, minimum expectancy R 0.05, and existing LiveTradingGate.
+- MT5 remains read-only/analysis-only.
+- A 9:1 win rate or guaranteed profit must never be claimed; performance must be established from measured paper/live outcomes.
 
-## Deliverables
-1. Focus/radar domain model and service.
-2. Market-data aggregation using existing adapters; do not rewrite Scanner Engine.
-3. Focus UI with current candidate, reason codes, score breakdown, freshness and invalidation reason.
-4. Background monitoring integration using existing Android background mechanism, notifications only.
-5. Regression tests and CI.
-6. Release APK only after all CI checks pass.
-
-## Safety rule
-Unknown/stale/failed market state => NO TRADE. Background => NO ORDER. Never claim a 9:1 win rate or guaranteed profit; validate performance through paper-trading statistics first.
+Implementation status:
+- Persistent market focus across foreground/background runs.
+- Bounded market scan plus deep candidate re-check.
+- Material focus-switching policy.
+- FOCUS / WAIT / INVALID / STALE / NO SETUP states.
+- Configurable background notification thresholds 80/90/93/95.
+- One-off background test trigger and last-run status UI.
+- Regression tests for focus selection and anti-stale/non-buy selection.
