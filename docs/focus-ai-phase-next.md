@@ -12,7 +12,7 @@ Safety contract:
 - A 9:1 win rate or guaranteed profit must never be claimed; performance must be established from measured paper/live outcomes.
 
 Implementation status:
-- Persistent market focus across foreground/background runs.
+- Persistent focus selection across foreground/background runs.
 - Bounded market scan plus deep candidate re-check.
 - Material focus-switching policy.
 - FOCUS / WAIT / INVALID / STALE / NO SETUP states.
