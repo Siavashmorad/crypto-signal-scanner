@@ -86,13 +86,19 @@ class BackgroundMonitorService {
   static Future<void> initialize() async {
     await Workmanager().initialize(signalyabBackgroundCallback);
     await _register();
+    await _registerImmediateCheck();
   }
 
   static Future<void> setEnabled(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(kBackgroundMonitorEnabled, enabled);
     await prefs.setBool('realtime_background_polling', enabled);
-    await _register();
+    if (enabled) {
+      await _register();
+      await _registerImmediateCheck();
+    } else {
+      await Workmanager().cancelByUniqueName(kBackgroundMonitorTask);
+    }
   }
 
   static Future<bool> isEnabled() async {
@@ -112,6 +118,19 @@ class BackgroundMonitorService {
   }
 
   static Future<void> syncFromSettings() async => _register();
+
+  static Future<void> _registerImmediateCheck() async {
+    try {
+      await Workmanager().registerOneOffTask(
+        '${kBackgroundMonitorTask}_now_${DateTime.now().millisecondsSinceEpoch}',
+        kBackgroundMonitorTask,
+        initialDelay: const Duration(seconds: 5),
+        constraints: Constraints(networkType: NetworkType.connected),
+      );
+    } catch (_) {
+      // Periodic registration remains the fallback if one-off scheduling fails.
+    }
+  }
 
   static Future<void> _register() async {
     await Workmanager().registerPeriodicTask(
