@@ -109,7 +109,6 @@ class FocusCoinServiceV2 {
         count += 1;
       }
       if (tf.rsi != null) {
-        // Favor healthy bullish momentum, penalize exhaustion.
         final rsi = tf.rsi!;
         score += rsi >= 52 && rsi <= 72
             ? 100
@@ -148,8 +147,6 @@ class FocusCoinServiceV2 {
     final momentum = _momentumQuality(r);
     final freshness = _freshnessQuality(r);
     final risk = _riskQuality(r);
-    // Scanner score remains the dominant evidence; auxiliary terms cannot inflate
-    // a weak setup into a tradeable one.
     final raw = r.score * 0.45 +
         r.confidence * 0.20 +
         alignment * 0.18 +
@@ -167,8 +164,6 @@ class FocusCoinServiceV2 {
     final previousFocus = _focusSymbol;
     final now = DateTime.now();
 
-    // Keep the public parameter for compatibility, but deliberately use the
-    // four confirmation timeframes instead of trusting a single 15m scan.
     final scanned = await _multiTimeframeScan(maxSymbols: maxSymbols);
     if (scanned.isEmpty) {
       await _saveFocus(null);
@@ -223,7 +218,7 @@ class FocusCoinServiceV2 {
         current.result.score >= keepScore &&
         current.result.confidence >= startConfidence &&
         current.composite >= best.composite - switchAdvantage;
-    final chosen = keepCurrent ? current : best;
+    final chosen = keepCurrent ? current! : best;
     final switched = previousFocus != null && chosen.signal.symbol != previousFocus;
     await _saveFocus(chosen.signal.symbol);
 
@@ -253,8 +248,7 @@ class FocusCoinServiceV2 {
       'نسبت سود به زیان: ۱:${(chosen.result.riskReward ?? 0).toStringAsFixed(1)}',
       ...chosen.result.reasonsFa.take(4),
       'تأیید ۵دقیقه، ۱۵دقیقه، ۱ساعت و ۴ساعت؛ امتیاز مصنوعی اضافه نمی‌شود',
-      if (!start)
-        'تأیید کامل برای شروع هنوز برقرار نیست؛ فقط هشدار/تحت نظر',
+      if (!start) 'تأیید کامل برای شروع هنوز برقرار نیست؛ فقط هشدار/تحت نظر',
     ];
 
     return FocusSnapshotV2(
