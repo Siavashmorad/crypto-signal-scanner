@@ -35,7 +35,7 @@ class SignalApp extends StatefulWidget {
 }
 
 class _SignalAppState extends State<SignalApp> {
-  bool dark = false, english = false, logged = false, ready = false;
+  bool dark = true, english = false, logged = false, ready = false;
   String? sessionUsername;
   String? sessionPassword;
   FcmOpportunityPayload? pendingFromPush;
