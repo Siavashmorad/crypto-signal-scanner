@@ -218,7 +218,7 @@ class FocusCoinServiceV2 {
         current.result.score >= keepScore &&
         current.result.confidence >= startConfidence &&
         current.composite >= best.composite - switchAdvantage;
-    final chosen = keepCurrent ? current! : best;
+    final chosen = keepCurrent ? current : best;
     final switched = previousFocus != null && chosen.signal.symbol != previousFocus;
     await _saveFocus(chosen.signal.symbol);
 
